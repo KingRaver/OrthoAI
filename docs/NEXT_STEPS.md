@@ -17,10 +17,12 @@ This is a working checklist of the most practical steps to move OrthoAI forward,
 
 ## 3) Model Validation (Baseline)
 - Run a 10‑prompt evaluation set:
-  - 3 evidence synthesis prompts
-  - 3 mechanistic reasoning prompts
-  - 2 hypothesis prompts
-  - 2 study design prompts
+  - 2 clinical consult prompts
+  - 2 surgical planning prompts
+  - 2 complications/risk prompts
+  - 2 imaging dx prompts
+  - 1 rehab/RTP prompt
+  - 1 evidence brief prompt
 - Record response quality, hallucinations, and failure modes
 
 ## 4) Decide Ingestion Strategy (Phase 0)

@@ -35,7 +35,7 @@ export async function POST(req: NextRequest) {
       responseTime,
       tokensUsed,
       userMessage,
-      mode // Track interaction mode (synthesis, mechanistic, hypothesis, study-design, auto)
+      mode // Track interaction mode (clinical-consult, surgical-planning, complications-risk, imaging-dx, rehab-rtp, evidence-brief, auto)
     } = await req.json();
 
     if (!feedback) {
@@ -120,7 +120,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Record mode interaction feedback (for synthesis, mechanistic, hypothesis, study-design, auto modes)
+    // Record mode interaction feedback (for clinical-consult, surgical-planning, complications-risk, imaging-dx, rehab-rtp, evidence-brief, auto modes)
     if (mode) {
       await modeAnalytics.updateFeedback(decisionId, feedback);
       console.log(`[Feedback] Mode ${mode} feedback: ${feedback} (quality: ${qualityScore})`);

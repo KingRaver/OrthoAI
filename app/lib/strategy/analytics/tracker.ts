@@ -188,7 +188,7 @@ export class StrategyAnalytics {
       averageResponseTime: 2500,
       averageTokens: 1200,
       averageQuality: 0.88,
-      bestUseCases: ['evidence-synthesis'],
+      bestUseCases: ['clinical-consult'],
       worstUseCases: [],
       lastUpdated: new Date()
     };

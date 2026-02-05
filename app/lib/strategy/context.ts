@@ -35,7 +35,14 @@ interface ConversationMetadata {
   userSatisfaction: number;
 }
 
-type DetectionMode = 'synthesis' | 'mechanistic' | 'hypothesis' | 'study-design' | null;
+type DetectionMode =
+  | 'clinical-consult'
+  | 'surgical-planning'
+  | 'complications-risk'
+  | 'imaging-dx'
+  | 'rehab-rtp'
+  | 'evidence-brief'
+  | null;
 
 const DEFAULT_MODELS: ModelInfo[] = [
   {
@@ -54,7 +61,7 @@ const DEFAULT_MODELS: ModelInfo[] = [
     displayName: 'BioMistral 7B',
     size: '7B',
     type: 'balanced',
-    strengths: ['evidence synthesis', 'mechanistic reasoning', 'study design'],
+    strengths: ['clinical consults', 'surgical planning', 'evidence briefs'],
     weaknesses: ['very long chain-of-thought tasks'],
     ramRequired: 8000,
     gpuRequired: true,
@@ -116,18 +123,20 @@ function calculateComplexityScore(
   let score = baseComplexity === 'simple' ? 20 : baseComplexity === 'moderate' ? 50 : 80;
 
   const messageLength = userMessage.length;
-  const hasStudyDesign = /\b(trial|protocol|randomized|endpoint|sample size|power)\b/i.test(userMessage);
-  const hasMechanism = /\b(mechanism|pathway|biomechanics|strain|stress|collagen|ECM)\b/i.test(userMessage);
-  const hasEvidence = /\b(systematic review|meta-analysis|cohort|case-control|RCT)\b/i.test(userMessage);
-  const hasImaging = /\b(MRI|ultrasound|CT|radiograph)\b/i.test(userMessage);
+  const hasSurgery = /\b(surgery|operative|approach|technique|implant|fixation)\b/i.test(userMessage);
+  const hasComplications = /\b(complication|risk|infection|revision|failure|nonunion)\b/i.test(userMessage);
+  const hasEvidence = /\b(guideline|systematic review|meta-analysis|cohort|case-control|RCT)\b/i.test(userMessage);
+  const hasImaging = /\b(MRI|ultrasound|CT|radiograph|x-ray)\b/i.test(userMessage);
+  const hasRehab = /\b(rehab|physical therapy|return to play|RTP|protocol)\b/i.test(userMessage);
   const lineCount = userMessage.split('\n').length;
 
   if (messageLength > 500) score += 10;
   if (messageLength > 1000) score += 10;
-  if (hasStudyDesign) score += 12;
-  if (hasMechanism) score += 10;
+  if (hasSurgery) score += 10;
+  if (hasComplications) score += 10;
   if (hasEvidence) score += 8;
   if (hasImaging) score += 6;
+  if (hasRehab) score += 6;
   if (lineCount > 50) score += 6;
 
   return Math.min(100, Math.max(0, score));

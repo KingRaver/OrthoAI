@@ -25,7 +25,7 @@ export class AdaptiveStrategy extends BaseStrategy {
 
   async decide(context: StrategyContext): Promise<StrategyDecision> {
     const complexity = context.complexityScore || 50;
-    const mode = context.detectedMode || 'synthesis';
+    const mode = context.detectedMode || 'clinical-consult';
 
     try {
       const themeDetection = await patternRecognizer.detectTheme(context.userMessage);

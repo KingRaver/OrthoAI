@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Documentation] - 2026-02-05 - Fix BioMistral Startup Instructions
+
+### Added
+- `docs/STARTUP.md` with three-terminal startup commands (LLM server, embeddings server, app).
+
+### Changed
+- `docs/SETUP.md` and `docs/STARTUP.md` updated to use the correct BioMistral GGUF repo (`tensorblock/BioMistral-7B-GGUF`).
+- Added `BioMistral-7B-Q5_K_M.gguf` as an optional higher quality model.
+- Removed the gated-model token note since the repo is not gated.
+
 ## [Bug Fix] - 2026-01-25 - ChromaDB Multi-Filter Query Fix
 
 ### Problem

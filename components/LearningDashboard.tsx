@@ -350,17 +350,19 @@ export default function LearningDashboard() {
           <div className="space-y-4">
             <h3 className="text-lg font-bold text-slate-900 mb-4">Interaction Mode Performance</h3>
             <p className="text-sm text-slate-600 mb-4">
-              Track how well each mode (Auto, Synthesis, Mechanistic, Hypothesis, Study Design) performs based on your feedback.
+              Track how well each mode (Auto, Clinical Consult, Surgical Planning, Complications/Risk, Imaging Dx, Rehab/RTP, Evidence Brief) performs based on your feedback.
             </p>
             {data.modes && data.modes.length > 0 ? (
               <div className="grid gap-3">
                 {data.modes.map((mode, i) => {
                   const modeNames: Record<string, string> = {
                     'auto': '🤖 Auto Mode',
-                    'synthesis': '📚 Evidence Synthesis',
-                    'mechanistic': '⚙️ Mechanistic Reasoning',
-                    'hypothesis': '🧪 Hypothesis Builder',
-                    'study-design': '🧭 Study Design'
+                    'clinical-consult': '🩺 Clinical Consult',
+                    'surgical-planning': '🧰 Surgical Planning',
+                    'complications-risk': '⚠️ Complications & Risk',
+                    'imaging-dx': '🧠 Imaging Dx',
+                    'rehab-rtp': '🏃 Rehab / RTP',
+                    'evidence-brief': '📌 Evidence Brief'
                   };
                   const modeName = modeNames[mode.mode] || mode.mode;
 

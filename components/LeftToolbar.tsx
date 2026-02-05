@@ -21,7 +21,14 @@ interface UserProfile {
 }
 
 export interface ToolbarSettings {
-  manualMode: '' | 'synthesis' | 'mechanistic' | 'hypothesis' | 'study-design';
+  manualMode:
+    | ''
+    | 'clinical-consult'
+    | 'surgical-planning'
+    | 'complications-risk'
+    | 'imaging-dx'
+    | 'rehab-rtp'
+    | 'evidence-brief';
   selectedStrategy: StrategyType;
   workflowMode: WorkflowMode;
   model: string;
@@ -205,25 +212,41 @@ export default function LeftToolbar({
             <select
               value={settings.manualMode}
               onChange={(e) =>
-                updateSetting('manualMode', e.target.value as '' | 'synthesis' | 'mechanistic' | 'hypothesis' | 'study-design')
+                updateSetting(
+                  'manualMode',
+                  e.target.value as
+                    | ''
+                    | 'clinical-consult'
+                    | 'surgical-planning'
+                    | 'complications-risk'
+                    | 'imaging-dx'
+                    | 'rehab-rtp'
+                    | 'evidence-brief'
+                )
               }
               className="w-full px-3 py-2 rounded-xl text-xs font-bold bg-white/70 text-slate-900 border-2 border-slate-900/40 hover:bg-white hover:border-slate-900/70 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-slate-900/60 cursor-pointer shadow-sm hover:shadow-md"
-              title="Mode: Auto-detect or select synthesis, mechanistic, hypothesis, or study design"
+              title="Mode: Auto-detect or select clinical consult, surgical planning, complications/risk, imaging dx, rehab/RTP, or evidence brief"
             >
               <option value="" className="bg-white text-slate-900 font-bold">
                 🤖 Auto
               </option>
-              <option value="synthesis" className="bg-white text-slate-900 font-bold">
-                📚 Synthesis
+              <option value="clinical-consult" className="bg-white text-slate-900 font-bold">
+                🩺 Clinical Consult
               </option>
-              <option value="mechanistic" className="bg-white text-slate-900 font-bold">
-                ⚙️ Mechanistic
+              <option value="surgical-planning" className="bg-white text-slate-900 font-bold">
+                🧰 Surgical Planning
               </option>
-              <option value="hypothesis" className="bg-white text-slate-900 font-bold">
-                🧪 Hypothesis
+              <option value="complications-risk" className="bg-white text-slate-900 font-bold">
+                ⚠️ Complications & Risk
               </option>
-              <option value="study-design" className="bg-white text-slate-900 font-bold">
-                🧭 Study Design
+              <option value="imaging-dx" className="bg-white text-slate-900 font-bold">
+                🧠 Imaging Dx
+              </option>
+              <option value="rehab-rtp" className="bg-white text-slate-900 font-bold">
+                🏃 Rehab / RTP
+              </option>
+              <option value="evidence-brief" className="bg-white text-slate-900 font-bold">
+                📌 Evidence Brief
               </option>
             </select>
 
@@ -453,15 +476,27 @@ export default function LeftToolbar({
         <select
           value={settings.manualMode}
           onChange={(e) =>
-            updateSetting('manualMode', e.target.value as '' | 'synthesis' | 'mechanistic' | 'hypothesis' | 'study-design')
+            updateSetting(
+              'manualMode',
+              e.target.value as
+                | ''
+                | 'clinical-consult'
+                | 'surgical-planning'
+                | 'complications-risk'
+                | 'imaging-dx'
+                | 'rehab-rtp'
+                | 'evidence-brief'
+            )
           }
           className="px-3 py-2 rounded-xl text-xs font-bold bg-white/70 text-slate-900 border-2 border-slate-900/40 shadow-sm"
         >
           <option value="">🤖 Auto</option>
-          <option value="synthesis">📚 Synthesis</option>
-          <option value="mechanistic">⚙️ Mechanistic</option>
-          <option value="hypothesis">🧪 Hypothesis</option>
-          <option value="study-design">🧭 Study Design</option>
+          <option value="clinical-consult">🩺 Clinical Consult</option>
+          <option value="surgical-planning">🧰 Surgical Planning</option>
+          <option value="complications-risk">⚠️ Complications & Risk</option>
+          <option value="imaging-dx">🧠 Imaging Dx</option>
+          <option value="rehab-rtp">🏃 Rehab / RTP</option>
+          <option value="evidence-brief">📌 Evidence Brief</option>
         </select>
         <select
           value={settings.model}

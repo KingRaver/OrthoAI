@@ -288,9 +288,17 @@ export class ParameterTuner {
    * Get default heuristic-based recommendations
    */
   private getDefaultRecommendation(theme: string, complexity: number): TuningRecommendation {
-    // Creative tasks benefit from higher temperature
-    const creativeTasks = ['architecture', 'refactoring', 'documentation'];
-    const isCreative = creativeTasks.includes(theme);
+    const lowTempThemes = [
+      'clinical-consult',
+      'surgical-planning',
+      'complications-risk',
+      'imaging-dx',
+      'evidence-brief'
+    ];
+    const midTempThemes = ['rehab-rtp'];
+
+    const isLowTemp = lowTempThemes.includes(theme);
+    const isMidTemp = midTempThemes.includes(theme);
 
     // Complex tasks need more tokens
     const baseTokens = 8000;
@@ -300,8 +308,14 @@ export class ParameterTuner {
     // Enable tools for moderate to high complexity
     const enableTools = complexity > 50;
 
+    const temperature = isLowTemp
+      ? 0.3
+      : isMidTemp
+        ? 0.35
+        : (complexity > 70 ? 0.5 : 0.4);
+
     return {
-      temperature: isCreative ? 0.6 : (complexity > 70 ? 0.5 : 0.3),
+      temperature,
       maxTokens: Math.min(16000, maxTokens),
       enableTools,
       confidence: 0.5, // Low confidence for defaults

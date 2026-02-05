@@ -2,7 +2,7 @@
 
 ## Overview
 
-OrthoAI’s learning system continuously improves model selection and generation parameters based on your feedback. It is designed for orthopedic research workflows (evidence synthesis, mechanistic reasoning, hypothesis generation, and study design), not coding tasks.
+OrthoAI’s learning system continuously improves model selection and generation parameters based on your feedback. It is designed for attending-level orthopedic clinical workflows (clinical consults, surgical planning, complications/risk, imaging dx, rehab/RTP, evidence briefs), not coding tasks.
 
 ## Key Features Implemented
 
@@ -11,7 +11,7 @@ OrthoAI’s learning system continuously improves model selection and generation
 
 - **Thumbs Up/Down** feedback for every assistant response
 - **Immediate UI feedback** and async logging
-- **Applies to all modes** (Auto, Synthesis, Mechanistic, Hypothesis, Study Design)
+- **Applies to all modes** (Auto, Clinical Consult, Surgical Planning, Complications/Risk, Imaging Dx, Rehab/RTP, Evidence Brief)
 
 ### 2. Feedback API + Learning Integration
 **Location**: `app/api/feedback/route.ts`
@@ -26,14 +26,13 @@ Records feedback across multiple learning layers:
 ### 3. Pattern Recognition (Orthopedic Themes)
 **Location**: `app/lib/learning/patternRecognition.ts`
 
-Detects core orthopedic research themes:
-- `evidence-synthesis`
-- `mechanistic`
-- `study-design`
-- `hypothesis`
-- `surgical-technique`
-- `imaging`
-- `rehabilitation`
+Detects core orthopedic clinical themes:
+- `clinical-consult`
+- `surgical-planning`
+- `complications-risk`
+- `imaging-dx`
+- `rehab-rtp`
+- `evidence-brief`
 
 Learns which models and parameters perform best for each theme.
 
@@ -68,4 +67,4 @@ Predicts expected response quality before generation based on:
 
 ## Notes
 
-This learning system is scoped to orthopedic research workflows. If you expand OrthoAI into new domains, update theme patterns and parameter heuristics accordingly.
+This learning system is scoped to orthopedic clinical workflows. If you expand OrthoAI into new domains, update theme patterns and parameter heuristics accordingly.

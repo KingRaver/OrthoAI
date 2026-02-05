@@ -30,7 +30,7 @@ export class WorkflowStrategy extends BaseStrategy {
 
   async decide(context: StrategyContext): Promise<StrategyDecision> {
     const complexity = context.complexityScore || 50;
-    const mode = context.detectedMode || 'synthesis';
+    const mode = context.detectedMode || 'clinical-consult';
 
     try {
       const themeDetection = await patternRecognizer.detectTheme(context.userMessage);
@@ -78,10 +78,10 @@ export class WorkflowStrategy extends BaseStrategy {
       return 'ensemble';
     }
 
-    const ensembleThemes = ['evidence', 'guideline', 'comparative', 'surgery'];
+    const ensembleThemes = ['evidence-brief', 'surgical-planning', 'complications-risk'];
     const useEnsemble = ensembleThemes.some(t => theme.includes(t)) && resources.availableRAM >= 8000;
 
-    const chainThemes = ['synthesis', 'study-design', 'mechanism', 'hypothesis'];
+    const chainThemes = ['clinical-consult', 'surgical-planning', 'complications-risk', 'imaging-dx', 'rehab-rtp', 'evidence-brief'];
     const useChain = chainThemes.some(t => theme.includes(t)) || complexity > 70;
 
     if (useEnsemble && !useChain) return 'ensemble';

@@ -24,7 +24,6 @@ export class ModelChainWorkflow {
     executionTime: number;
   }> {
     const startTime = Date.now();
-    const maxTokens = options.maxTotalTokens || 25000;
     let totalTokens = 0;
     const chainResults: ChainStepResult[] = [];
     let currentResponse = '';
@@ -49,10 +48,6 @@ export class ModelChainWorkflow {
 
         console.log(`[Chain:${step.role}] ${stepResult.tokensUsed}t | conf: ${stepResult.confidence?.toFixed(2)}`);
 
-        if (totalTokens > maxTokens || (stepResult.confidence && stepResult.confidence < 0.3)) {
-          console.log(`[Chain] Early stop: tokens=${totalTokens}, conf=${stepResult.confidence}`);
-          break;
-        }
       } catch (error: any) {
         console.error(`[Chain:${step.role}] Error:`, error);
         chainResults.push({
@@ -108,7 +103,6 @@ export class ModelChainWorkflow {
     const body = {
       model: step.model,
       messages,
-      max_tokens: step.maxTokens || (isFinalStep ? 6000 : 3000),
       temperature: step.temperature || (isFinalStep ? 0.3 : 0.6),
       top_p: 0.9,
       stream: false,

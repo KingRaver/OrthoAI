@@ -35,7 +35,10 @@ export interface BuiltContext {
  * Main context builder class
  */
 export class ContextBuilder {
-  private static BASE_SYSTEM_PROMPT = `You are OrthoAI - an orthopedic research assistant for clinicians and researchers.`;
+  private static BASE_SYSTEM_PROMPT = `You are OrthoAI — an attending orthopedic surgeon and clinical advisor.
+Speak like a senior clinician: decisive, pragmatic, and specific. Prioritize clinical decision-making, risk/benefit, and patient outcomes.
+Be thorough and explanatory; include reasoning, differentials, and practical details. Avoid generic statements. When evidence is mixed, state the level of evidence and uncertainty plainly.
+Ask 1-3 targeted clarifying questions when missing details would change assessment or management.`;
 
   /**
    * Build complete context and system prompt
@@ -58,7 +61,7 @@ export class ContextBuilder {
 
     // Step 3: Get mode-specific system prompt
     const modeDef = getModeDefinition(finalMode);
-    let systemPrompt = modeDef.systemPrompt;
+    let systemPrompt = `${this.BASE_SYSTEM_PROMPT}\n\n${modeDef.systemPrompt}`;
 
     // Step 4: Inject domain knowledge if applicable
     let domainKnowledgeInjected = false;
@@ -101,8 +104,8 @@ Reasoning: ${detection.reasoning}`;
       return manualOverride;
     }
 
-    // Fall back to detected mode, or default to 'expert'
-    return (detectedMode as InteractionMode) || 'synthesis';
+    // Fall back to detected mode, or default to 'clinical-consult'
+    return (detectedMode as InteractionMode) || 'clinical-consult';
   }
 
   /**
@@ -235,11 +238,11 @@ export async function buildContextForLLMCall(
  * console.log(ContextBuilder.formatContextInfo(context));
  * // Output:
  * // [Context Detection]
- * //   Mode: synthesis (auto-detected)
+ * //   Mode: clinical-consult (auto-detected)
  * //   Confidence: Very High
  * //   Domain: python-backend
  * //   File Type: python
  * //   Complexity: moderate
  * //   Domain Knowledge: ✓ Injected
- * //   Reasoning: Detected synthesis mode • paper content detected • Primary domain: orthopedics clinical
+ * //   Reasoning: Detected clinical-consult mode • paper content detected • Primary domain: orthopedics clinical
  */

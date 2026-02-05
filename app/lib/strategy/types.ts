@@ -223,7 +223,7 @@ export interface ModelMetrics {
   averageResponseTime: number; // ms
   averageTokens: number;
   averageQuality: number; // 0-1
-  bestUseCases: string[]; // ['evidence-synthesis', 'study-design']
+  bestUseCases: string[]; // ['clinical-consult', 'surgical-planning']
   worstUseCases: string[];
   lastUpdated: Date;
 }

@@ -22,7 +22,7 @@ interface Message {
     modelUsed?: string;
     responseTime?: number;
     tokensUsed?: number;
-    mode?: string; // Track interaction mode (synthesis, mechanistic, hypothesis, study-design, auto)
+    mode?: string; // Track interaction mode (clinical-consult, surgical-planning, complications-risk, imaging-dx, rehab-rtp, evidence-brief, auto)
   };
 }
 
@@ -466,7 +466,7 @@ export default function Chat() {
                         Select your OrthoAI mode
                       </p>
                       <p className="text-xs mt-3 opacity-70 font-medium text-slate-400">
-                        Evidence synthesis • Biomechanics • Local • Voice Ready
+                        Clinical consult • Surgical planning • Complications • Imaging • Rehab • Evidence
                       </p>
                     </div>
                   ) : (
@@ -618,7 +618,7 @@ export default function Chat() {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyPress}
-                placeholder="Ask about orthopedics research, biomechanics, imaging, or study design... (Enter to send)"
+                placeholder="Ask about orthopedic cases, surgical planning, complications, imaging, rehab, or evidence... (Enter to send)"
                 className="flex-1 p-5 bg-transparent text-slate-900 placeholder-slate-400 border-0 resize-none focus:outline-none focus:ring-2 focus:ring-teal/60 rounded-xl min-h-11 max-h-32 font-medium text-sm transition-all duration-200"
                 rows={1}
                 disabled={isLoading}
@@ -637,13 +637,17 @@ export default function Chat() {
           <div className="text-xs text-slate-500 text-center pt-4 border-t border-cyan-light/20 font-medium tracking-widest">
             🔒 Offline • M4 Optimized • {currentSettings.model.split(':')[0]} • {messages.length} messages
             {currentSettings.manualMode && ` • ${
-              currentSettings.manualMode === 'synthesis'
-                ? '📚'
-                : currentSettings.manualMode === 'mechanistic'
-                ? '⚙️'
-                : currentSettings.manualMode === 'hypothesis'
-                ? '🧪'
-                : '🧭'
+              currentSettings.manualMode === 'clinical-consult'
+                ? '🩺'
+                : currentSettings.manualMode === 'surgical-planning'
+                ? '🧰'
+                : currentSettings.manualMode === 'complications-risk'
+                ? '⚠️'
+                : currentSettings.manualMode === 'imaging-dx'
+                ? '🧠'
+                : currentSettings.manualMode === 'rehab-rtp'
+                ? '🏃'
+                : '📌'
             } ${currentSettings.manualMode}`}
             {currentSettings.voiceEnabled && ' • 🎤 Voice Active'}
           </div>

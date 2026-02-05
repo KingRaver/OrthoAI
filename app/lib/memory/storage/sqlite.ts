@@ -47,7 +47,11 @@ export class SQLiteStorage {
     // Get all migration files in order
     const migrationFiles = fs.readdirSync(migrationsDir)
       .filter(file => file.endsWith('.sql'))
-      .sort(); // Ensures init.sql runs before 002_strategy_analytics.sql
+      .sort((a, b) => {
+        if (a === 'init.sql') return -1;
+        if (b === 'init.sql') return 1;
+        return a.localeCompare(b);
+      }); // Ensure init.sql runs first
 
     console.log(`[SQLite] Running ${migrationFiles.length} migrations...`);
 
@@ -56,23 +60,14 @@ export class SQLiteStorage {
       const migrationPath = path.join(migrationsDir, migrationFile);
       const migrationSQL = fs.readFileSync(migrationPath, 'utf-8');
 
-      // Split migration into individual statements and execute
-      const statements = migrationSQL
-        .split(';')
-        .map(s => s.trim())
-        .filter(s => s.length > 0);
-
-      statements.forEach(statement => {
-        try {
-          this.db.exec(statement);
-        } catch (error) {
-          // Ignore "already exists" errors
-          if (!(error instanceof Error) || !error.message.includes('already exists')) {
-            console.error(`[SQLite] Error in ${migrationFile}:`, error);
-            throw error;
-          }
-        }
-      });
+      try {
+        // Execute the full migration file at once.
+        // This supports multi-statement constructs like triggers.
+        this.db.exec(migrationSQL);
+      } catch (error) {
+        console.error(`[SQLite] Error in ${migrationFile}:`, error);
+        throw error;
+      }
 
       console.log(`[SQLite] ✓ Applied migration: ${migrationFile}`);
     }

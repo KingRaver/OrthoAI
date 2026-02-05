@@ -1,6 +1,6 @@
 # OrthoAI
 
-Local-first orthopedic research intelligence for clinicians and researchers. OrthoAI is optimized for evidence synthesis, mechanistic reasoning, hypothesis generation, and study design workflows with persistent memory and RAG.
+Local-first orthopedic clinical intelligence for clinicians. OrthoAI is optimized for clinical consults, surgical planning, complications/risk, imaging dx, rehab/RTP, and evidence briefs with persistent memory and RAG.
 
 ## Core Capabilities
 - **Evidence Synthesis**: compare studies, outcomes, and cohorts with structured summaries
@@ -21,7 +21,7 @@ OrthoAI uses an OpenAI-compatible local server (llama.cpp) for inference.
 
 ## Models
 Recommended starting set (Option A):
-- **BioMistral 7B** (primary synthesis + reasoning)
+- **BioMistral 7B** (primary clinical decision support + surgical planning)
 - **BioGPT** (fast extraction / compact answers)
 
 ## Development

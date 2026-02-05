@@ -24,7 +24,7 @@ export const viewport: Viewport = {
 // Metadata Configuration - OrthoAI
 export const metadata: Metadata = {
   title: '🦴 OrthoAI | Orthopedic Research Intelligence',
-  description: 'Local-first orthopedic research intelligence for clinicians and researchers. Evidence synthesis, mechanistic reasoning, hypothesis generation, and study design with citations and feedback-driven learning.',
+  description: 'Local-first orthopedic clinical intelligence for clinicians. Clinical consults, surgical planning, complications/risk, imaging dx, rehab/RTP, and evidence briefs with feedback-driven learning.',
   keywords: [
     'Orthopedics',
     'Orthopedic Research',
@@ -55,7 +55,7 @@ export const metadata: Metadata = {
     url: 'https://orthoai.local',
     siteName: 'OrthoAI',
     title: '🦴 OrthoAI | Orthopedic Research Intelligence',
-    description: 'Local-first orthopedic research intelligence with evidence synthesis, mechanistic reasoning, and discovery workflows.'
+    description: 'Local-first orthopedic clinical intelligence with consult, surgical planning, complications/risk, imaging, rehab, and evidence workflows.'
   },
   appleWebApp: {
     capable: true,

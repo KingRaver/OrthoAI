@@ -174,20 +174,20 @@ export class QualityPredictor {
     // Default scores based on known model strengths
     const modelStrengths: { [key: string]: { [key: string]: number } } = {
       'biomistral-7b': {
-        'evidence-synthesis': 0.90,
-        'mechanistic': 0.88,
-        'study-design': 0.87,
-        'surgical-technique': 0.85,
-        'imaging': 0.80,
-        'rehabilitation': 0.82
+        'clinical-consult': 0.90,
+        'surgical-planning': 0.88,
+        'complications-risk': 0.87,
+        'imaging-dx': 0.84,
+        'rehab-rtp': 0.83,
+        'evidence-brief': 0.89
       },
       'biogpt': {
-        'evidence-synthesis': 0.70,
-        'mechanistic': 0.65,
-        'study-design': 0.60,
-        'hypothesis': 0.68,
-        'imaging': 0.72,
-        'rehabilitation': 0.66
+        'clinical-consult': 0.72,
+        'surgical-planning': 0.66,
+        'complications-risk': 0.65,
+        'imaging-dx': 0.74,
+        'rehab-rtp': 0.68,
+        'evidence-brief': 0.70
       }
     };
 
@@ -232,8 +232,14 @@ export class QualityPredictor {
    */
   private calculateParameterScore(temperature: number, complexity: number, theme: string): number {
     // Ideal temperature ranges
-    const creativeTasks = ['architecture', 'refactoring', 'documentation'];
-    const preciseTasks = ['debugging', 'security', 'database'];
+    const creativeTasks: string[] = [];
+    const preciseTasks = [
+      'clinical-consult',
+      'surgical-planning',
+      'complications-risk',
+      'imaging-dx',
+      'evidence-brief'
+    ];
 
     let idealTemp = 0.4;
     if (creativeTasks.includes(theme)) {

@@ -1,7 +1,7 @@
 /**
- * Context Detector - Orthopedic Research Edition
+ * Context Detector - Orthopedic Clinical Edition
  * Detects:
- * - Mode (Evidence synthesis, Mechanistic reasoning, Hypothesis, Study design)
+ * - Mode (Clinical consult, Surgical planning, Complications/risk, Imaging dx, Rehab/RTP, Evidence brief)
  * - Content type (paper, protocol, imaging, dataset)
  * - Primary domain (clinical, surgical, biomechanics, tissue biology, imaging, rehab)
  * - Complexity score (0-100)
@@ -9,8 +9,21 @@
 
 import type { ComplexitySignals } from '../strategy/types';
 
-export type DetectionMode = 'synthesis' | 'mechanistic' | 'hypothesis' | 'study-design' | null;
-export type DetectionModeNonNull = 'synthesis' | 'mechanistic' | 'hypothesis' | 'study-design';
+export type DetectionMode =
+  | 'clinical-consult'
+  | 'surgical-planning'
+  | 'complications-risk'
+  | 'imaging-dx'
+  | 'rehab-rtp'
+  | 'evidence-brief'
+  | null;
+export type DetectionModeNonNull =
+  | 'clinical-consult'
+  | 'surgical-planning'
+  | 'complications-risk'
+  | 'imaging-dx'
+  | 'rehab-rtp'
+  | 'evidence-brief';
 export type FileType = 'paper' | 'protocol' | 'imaging' | 'dataset' | 'unknown';
 export type Domain =
   | 'orthopedics-clinical'
@@ -42,25 +55,35 @@ export interface EnhancedDetectionResult extends DetectionResult {
  * Keyword patterns for mode detection
  */
 const MODE_PATTERNS = {
-  synthesis: [
-    /\b(systematic review|meta-analysis|evidence synthesis|literature review)\b/i,
-    /\b(compare|contrast|summarize|overview|consensus)\b/i,
-    /\b(evidence|literature|studies|trial data)\b/i,
+  'clinical-consult': [
+    /\b(assessment|diagnosis|plan|management|workup|treatment)\b/i,
+    /\b(differential|ddx|recommendation|next steps)\b/i,
+    /\b(pain|swelling|instability|function|symptoms)\b/i,
   ],
-  mechanistic: [
-    /\b(mechanism|pathway|causal|biomechanics|kinematics)\b/i,
-    /\b(load|strain|stress|tensile|torque|moment)\b/i,
-    /\b(inflammation|healing|ECM|collagen|tenocyte)\b/i,
+  'surgical-planning': [
+    /\b(surgical|operative|approach|technique|steps|procedure)\b/i,
+    /\b(implant|fixation|graft|suture|anchor|osteotomy)\b/i,
+    /\b(positioning|exposure|fluoro|arthroscopy)\b/i,
   ],
-  hypothesis: [
-    /\b(hypothesis|predict|testable|novel|speculate)\b/i,
-    /\b(what if|why does|breakthrough|explain anomaly)\b/i,
-    /\b(propose|idea|theory)\b/i,
+  'complications-risk': [
+    /\b(complication|risk|failure|revision|reoperation|infection)\b/i,
+    /\b(nonunion|malunion|hardware|neurovascular)\b/i,
+    /\b(thrombosis|bleeding|wound|delayed healing)\b/i,
   ],
-  'study-design': [
-    /\b(study design|trial|protocol|randomized|cohort|case-control)\b/i,
-    /\b(inclusion|exclusion|endpoint|outcome|power|sample size)\b/i,
-    /\b(blinding|control group|comparator|allocation)\b/i,
+  'imaging-dx': [
+    /\b(MRI|CT|ultrasound|radiograph|x-ray)\b/i,
+    /\b(T1|T2|PD|STIR|contrast|sequence)\b/i,
+    /\b(imaging|scan|read|report|finding)\b/i,
+  ],
+  'rehab-rtp': [
+    /\b(rehab|physical therapy|PT|return to play|RTP)\b/i,
+    /\b(progressive loading|eccentric|isometric|protocol)\b/i,
+    /\b(strength|range of motion|ROM|functional test)\b/i,
+  ],
+  'evidence-brief': [
+    /\b(evidence|guideline|consensus|recommendation)\b/i,
+    /\b(systematic review|meta-analysis|RCT|cohort)\b/i,
+    /\b(best practice|society statement|level of evidence)\b/i,
   ],
 };
 
@@ -221,10 +244,12 @@ export class ContextDetector {
    */
   private static detectMode(input: string): DetectionMode {
     const scores: Record<string, number> = {
-      synthesis: 0,
-      mechanistic: 0,
-      hypothesis: 0,
-      'study-design': 0,
+      'clinical-consult': 0,
+      'surgical-planning': 0,
+      'complications-risk': 0,
+      'imaging-dx': 0,
+      'rehab-rtp': 0,
+      'evidence-brief': 0,
     };
 
     Object.entries(MODE_PATTERNS).forEach(([mode, patterns]) => {
@@ -344,7 +369,7 @@ export class ContextDetector {
 
     if (input.length > 200) score += 0.15;
     if ((input.match(/\b(please|need|want|analyze)\b/gi) || []).length > 0) score += 0.1;
-    if ((input.match(/\b(study|trial|mechanism|hypothesis)\b/gi) || []).length > 0) score += 0.2;
+    if ((input.match(/\b(surgery|operative|complication|imaging|rehab|guideline|evidence)\b/gi) || []).length > 0) score += 0.2;
 
     return Math.min(1, score);
   }

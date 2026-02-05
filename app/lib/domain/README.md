@@ -1,9 +1,9 @@
 # OrthoAI Domain Context System
 
-Orthopedic research context detection and prompt injection for OrthoAI.
+Orthopedic clinical context detection and prompt injection for OrthoAI.
 
 ## What It Does
-- Detects **mode**: synthesis, mechanistic, hypothesis, study-design
+- Detects **mode**: clinical-consult, surgical-planning, complications-risk, imaging-dx, rehab-rtp, evidence-brief
 - Detects **domain**: clinical, surgical, biomechanics, tissue biology, imaging, rehabilitation
 - Builds a system prompt with domain knowledge + mode-specific instructions
 
@@ -21,11 +21,11 @@ app/lib/domain/
 import { ContextBuilder } from './contextBuilder';
 
 const context = ContextBuilder.build({
-  userInput: 'Compare outcomes of surgical repair vs conservative management in Achilles rupture',
+  userInput: 'Middle-aged runner with Achilles rupture asking operative vs nonoperative options',
   includeDomainKnowledge: true
 });
 
-console.log(context.mode); // synthesis
+console.log(context.mode); // clinical-consult
 ```
 
 ## Extension Points

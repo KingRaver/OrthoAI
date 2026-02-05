@@ -55,7 +55,6 @@ export class EnsembleWorkflow {
     const body = {
       model,
       messages,
-      max_tokens: 3000,
       temperature: 0.3,
       stream: false,
     };

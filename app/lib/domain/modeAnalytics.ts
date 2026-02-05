@@ -5,7 +5,7 @@ import fs from 'fs';
 
 /**
  * Mode Analytics
- * Tracks performance of interaction modes (synthesis, mechanistic, hypothesis, study-design, auto)
+ * Tracks performance of interaction modes (clinical-consult, surgical-planning, complications-risk, imaging-dx, rehab-rtp, evidence-brief, auto)
  * Separate from strategy analytics - these track the personality/system prompt performance
  *
  * KEY DESIGN:
@@ -163,7 +163,15 @@ export class ModeAnalytics {
   }
 
   async getAllModesPerformance(): Promise<ModePerformance[]> {
-    const modes = ['auto', 'synthesis', 'mechanistic', 'hypothesis', 'study-design'];
+    const modes = [
+      'auto',
+      'clinical-consult',
+      'surgical-planning',
+      'complications-risk',
+      'imaging-dx',
+      'rehab-rtp',
+      'evidence-brief'
+    ];
     return Promise.all(modes.map(mode => this.getModePerformance(mode)));
   }
 }

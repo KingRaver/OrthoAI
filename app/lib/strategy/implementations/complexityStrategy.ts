@@ -43,13 +43,13 @@ export class ComplexityStrategy extends BaseStrategy {
       selectedModel = this.selectModelBySize('7B', context.availableModels.map(m => m.name));
       temperature = 0.4;
       maxTokens = 8000;
-      reasoning = `Moderate complexity (score: ${complexityScore}). Using balanced research model.`;
+      reasoning = `Moderate complexity (score: ${complexityScore}). Using balanced clinical model.`;
     } else {
       // COMPLEX: Expert model
       selectedModel = this.selectModelBySize('16B', context.availableModels.map(m => m.name));
       temperature = 0.5;
       maxTokens = 16000;
-      reasoning = `High complexity (score: ${complexityScore}). Using high-capability research model.`;
+      reasoning = `High complexity (score: ${complexityScore}). Using high-capability clinical model.`;
     }
 
     // Resource adjustments

@@ -3,19 +3,21 @@
 This document captures the agreed design decisions and scope for OrthoAI, plus expanded guidance on model selection, ingestion pipeline, and the RAG roadmap.
 
 ## 1) Purpose & Scope
-- **Goal:** Local-first orthopedic research intelligence for clinicians and researchers.
+- **Goal:** Local-first orthopedic clinical intelligence for clinicians.
 - **Domain scope:** Orthopedics broadly (not limited to a single injury or joint).
-- **Primary workflows:** Evidence synthesis, mechanistic reasoning, hypothesis generation, and study design.
+- **Primary workflows:** Clinical consults, surgical planning, complications/risk, imaging dx, rehab/RTP, and evidence briefs.
 - **No patient-facing guardrails in code:** No “not medical advice” or similar prompt/UI guardrails will be embedded in the system.
   - If any disclaimer is desired later, it should live **only in documentation**.
 
 ## 2) Users & Use Cases
-- **Target users:** Researchers and clinicians.
+- **Target users:** Clinicians.
 - **Common tasks:**
-  - Compare/contrast studies and outcomes
-  - Mechanistic reasoning across biomechanics + tissue biology
-  - Generate testable hypotheses
-  - Draft study protocols and endpoints
+  - Provide clinical assessment and management recommendations
+  - Plan surgical approaches, implants, and contingencies
+  - Stratify and manage complications and periop risk
+  - Interpret imaging in clinical context
+  - Design rehab progression and RTP criteria
+  - Summarize evidence/guidelines for decisions
 
 ## 3) Runtime & Deployment
 - **LLM runtime:** `llama.cpp` using OpenAI‑compatible endpoints.
@@ -27,7 +29,7 @@ This document captures the agreed design decisions and scope for OrthoAI, plus e
   - `EMBEDDING_MODEL`
 
 ## 4) Model Strategy (Option A)
-- **Primary model:** `biomistral-7b-instruct` (synthesis + reasoning)
+- **Primary model:** `biomistral-7b-instruct` (clinical decision support + surgical planning)
 - **Secondary model:** `biogpt` (fast extraction/compact output)
 - **Rotation:** Modular architecture allows model swaps later without major refactor.
 
@@ -49,15 +51,17 @@ This document captures the agreed design decisions and scope for OrthoAI, plus e
 - **Removed or disabled:** DL codegen injection and code‑centric prompts.
 
 ## 8) Interaction Modes (OrthoAI)
-- **Evidence Synthesis** (`synthesis`)
-- **Mechanistic Reasoning** (`mechanistic`)
-- **Hypothesis Builder** (`hypothesis`)
-- **Study Design** (`study-design`)
+- **Clinical Consult** (`clinical-consult`)
+- **Surgical Planning** (`surgical-planning`)
+- **Complications & Risk** (`complications-risk`)
+- **Imaging Dx** (`imaging-dx`)
+- **Rehab / RTP** (`rehab-rtp`)
+- **Evidence Brief** (`evidence-brief`)
 
-## 9) Research‑First UI Decisions
-- Outputs should label **evidence vs hypothesis** clearly.
-- Use structured summaries, tables, and limitations sections.
-- Prioritize citations and dataset provenance.
+## 9) Clinical‑First UI Decisions
+- Outputs should be structured: Assessment → Recommendation → Reasoning → Next Steps.
+- Ask targeted clarifying questions when missing details change management.
+- Prioritize decision impact and applicability; cite evidence when requested or relevant.
 
 ## 10) Feedback Loop
 - **Analytics retained** as the feedback system for iterative learning.
@@ -83,17 +87,17 @@ Use this rubric to compare candidate models before rotating them into OrthoAI.
 **1. Domain Fidelity**
 - Orthopedic terminology accuracy (anatomy, procedures, biomechanics, imaging)
 - Correct use of outcome measures and study design language
-- Consistent use of clinical vs mechanistic framing
+- Consistent use of clinical vs surgical framing where appropriate
 
 **2. Instruction Following**
-- Adheres to requested mode (synthesis vs mechanistic vs hypothesis vs study design)
+- Adheres to requested mode (clinical consult vs surgical planning vs complications/risk vs imaging dx vs rehab/RTP vs evidence brief)
 - Produces structured outputs (tables, sections, comparisons)
 - Complies with citation requirements
 
 **3. Reasoning Quality**
 - Causal pathway coherence (biomechanics → tissue response → outcome)
-- Evidence vs hypothesis separation
-- Can surface confounders, heterogeneity, and study limitations
+- Evidence strength and applicability to the patient scenario
+- Can surface confounders, heterogeneity, and limitations
 
 **4. Citation Fidelity**
 - Claims trace back to retrieved evidence
@@ -109,7 +113,7 @@ Use this rubric to compare candidate models before rotating them into OrthoAI.
 - Stable performance under long sessions
 
 **7. Error Profiles**
-- Common failure modes (over‑confident synthesis, wrong mechanistic pathways)
+- Common failure modes (over‑confident recommendations, wrong procedural steps, missed red flags)
 - Style drift when using tools or long multi‑turn contexts
 
 **Scoring suggestion:** 1–5 per category, with thresholds for promotion into “primary” or “secondary.”
@@ -171,7 +175,7 @@ A phased plan to scale retrieval without breaking local workflow.
 
 **Phase 2 — OA Full‑Text**
 - Europe PMC / PMC OA ingestion for full text
-- Weight OA full text higher in evidence synthesis
+- Weight OA full text higher in evidence briefs
 
 **Phase 3 — Citation Graphs**
 - Pull references and citation counts (OpenAlex / Semantic Scholar)

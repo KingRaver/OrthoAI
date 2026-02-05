@@ -33,7 +33,7 @@ export async function POST(req: NextRequest) {
       conversationId = null,
       useMemory: requestedUseMemory = true,
       filePath, // Optional: file path for domain detection
-      manualModeOverride, // Optional: user-selected mode ('synthesis' | 'mechanistic' | 'hypothesis' | 'study-design')
+      manualModeOverride, // Optional: user-selected mode ('clinical-consult' | 'surgical-planning' | 'complications-risk' | 'imaging-dx' | 'rehab-rtp' | 'evidence-brief')
       strategyEnabled: requestStrategyEnabled = false, // NEW: Strategy system toggle
       selectedStrategy = 'balanced', // NEW: Which strategy to use
       workflowMode = 'auto', // NEW: Workflow mode ('auto' | 'chain' | 'ensemble')
@@ -77,12 +77,15 @@ export async function POST(req: NextRequest) {
     // Get base system prompt from domain context
     let systemPrompt = llmContext.systemPrompt + `
 
-Keep responses clear, concise, and helpful. Use markdown formatting where appropriate:
+Responses should be thorough and explanatory. Be clinically decisive and structured, but include full reasoning, differential considerations, and step-by-step justification. Prefer: Assessment → Recommendation → Reasoning → Next Steps.
+State level of evidence and uncertainty when relevant. If key details are missing, include 1-3 targeted clarifying questions.
+Avoid generic statements; include specifics, thresholds, alternatives, and practical details.
+Use markdown formatting where appropriate:
 - Use code blocks with \`\`\` for code examples
 - Use inline code with \` for short code snippets
 - Use **bold** for emphasis
 - Use lists for structured information
-- Keep responses 1-3 sentences per concept when possible`;
+- Use readable paragraphs; do not abbreviate necessary clinical detail`;
 
     let temperature = llmContext.temperature;
     let maxTokens = llmContext.maxTokens;
@@ -280,7 +283,6 @@ Keep responses clear, concise, and helpful. Use markdown formatting where approp
       const body: any = {
         model,
         messages: enhancedMessages,
-        max_tokens: maxTokens,
         temperature: temperature,
         top_p: 0.85,
         stream: true,
@@ -475,7 +477,6 @@ Keep responses clear, concise, and helpful. Use markdown formatting where approp
     const completion = await openai.chat.completions.create({
       model,
       messages: enhancedMessages,
-      max_tokens: maxTokens,
       temperature: temperature,
       top_p: 0.85,
       stream: false,

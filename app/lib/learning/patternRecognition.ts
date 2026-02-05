@@ -1,6 +1,6 @@
 /**
  * Pattern Recognition System
- * Learns orthopedic research themes to improve model selection
+ * Learns orthopedic clinical themes to improve model selection
  */
 
 import sqlite3 from 'better-sqlite3';
@@ -31,35 +31,31 @@ export interface ThemeDetectionResult {
 export class PatternRecognizer {
   private db!: sqlite3.Database;
 
-  // Common themes in orthopedic research
+  // Common themes in orthopedic clinical practice
   private themePatterns = {
-    'evidence-synthesis': {
-      keywords: ['systematic review', 'meta-analysis', 'cohort', 'rct', 'trial', 'evidence', 'compare studies'],
-      defaultComplexity: 60
-    },
-    'mechanistic': {
-      keywords: ['mechanism', 'biomechanics', 'load', 'strain', 'stress', 'ecm', 'collagen', 'healing'],
-      defaultComplexity: 70
-    },
-    'study-design': {
-      keywords: ['study design', 'protocol', 'endpoint', 'sample size', 'power', 'randomized', 'blinding'],
-      defaultComplexity: 75
-    },
-    'hypothesis': {
-      keywords: ['hypothesis', 'predict', 'novel', 'breakthrough', 'testable'],
-      defaultComplexity: 65
-    },
-    'surgical-technique': {
-      keywords: ['arthroscopy', 'repair', 'reconstruction', 'implant', 'fixation', 'graft'],
-      defaultComplexity: 70
-    },
-    'imaging': {
-      keywords: ['mri', 'ultrasound', 'ct', 'radiograph', 't1', 't2', 'pd'],
+    'clinical-consult': {
+      keywords: ['assessment', 'diagnosis', 'plan', 'management', 'workup', 'treatment'],
       defaultComplexity: 55
     },
-    'rehabilitation': {
-      keywords: ['rehab', 'physical therapy', 'return to play', 'eccentric', 'isometric'],
+    'surgical-planning': {
+      keywords: ['operative', 'surgical', 'approach', 'technique', 'implant', 'fixation', 'graft', 'arthroscopy'],
+      defaultComplexity: 70
+    },
+    'complications-risk': {
+      keywords: ['complication', 'risk', 'infection', 'revision', 'failure', 'nonunion', 'malunion'],
+      defaultComplexity: 65
+    },
+    'imaging-dx': {
+      keywords: ['mri', 'ultrasound', 'ct', 'radiograph', 'x-ray', 't1', 't2', 'stir', 'sequence'],
+      defaultComplexity: 55
+    },
+    'rehab-rtp': {
+      keywords: ['rehab', 'physical therapy', 'return to play', 'rtp', 'eccentric', 'isometric', 'protocol'],
       defaultComplexity: 50
+    },
+    'evidence-brief': {
+      keywords: ['guideline', 'evidence', 'systematic review', 'meta-analysis', 'rct', 'cohort', 'consensus'],
+      defaultComplexity: 60
     }
   };
 
@@ -127,7 +123,7 @@ export class PatternRecognizer {
       }
     }
 
-    let primaryTheme = 'evidence-synthesis';
+    let primaryTheme = 'clinical-consult';
     let maxScore = 0;
 
     for (const [theme, score] of Object.entries(themeScores)) {
@@ -264,8 +260,14 @@ export class PatternRecognizer {
   }
 
   private suggestTemperatureForTheme(theme: string): number {
-    const creativeTasks = ['hypothesis'];
-    const preciseTasks = ['study-design', 'evidence-synthesis'];
+    const creativeTasks: string[] = [];
+    const preciseTasks = [
+      'clinical-consult',
+      'surgical-planning',
+      'complications-risk',
+      'imaging-dx',
+      'evidence-brief'
+    ];
 
     if (creativeTasks.includes(theme)) {
       return 0.6;

@@ -73,6 +73,9 @@ data/*.db
 chroma/
 *.chroma
 
+# Local docs
+docs/STARTUP.md
+
 # IDEs and editors
 .idea/
 .vscode/*

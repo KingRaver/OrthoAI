@@ -47,7 +47,7 @@ export const ORTHO_CLINICAL_KNOWLEDGE: DomainKnowledge = {
     'Underreporting complications or re-injury rates',
     'Selection bias in surgical vs conservative cohorts',
   ],
-  contextPrompt: `You are operating in a clinical orthopedic context.
+  contextPrompt: `You are advising as an orthopedic surgeon in a clinical context.
 
 FOCUS ON:
 - Outcome measures and functional endpoints
@@ -86,7 +86,7 @@ export const ORTHO_SURGICAL_KNOWLEDGE: DomainKnowledge = {
     'Uncontrolled surgeon experience effects',
     'Unclear definitions of failure or re-injury',
   ],
-  contextPrompt: `You are discussing orthopedic surgical research.
+  contextPrompt: `You are advising as an orthopedic surgeon in a surgical context.
 
 FOCUS ON:
 - Technique-specific outcomes and failure modes
@@ -121,7 +121,7 @@ export const BIOMECHANICS_KNOWLEDGE: DomainKnowledge = {
     'Unclear normalization of forces or moments',
     'Ignoring multi-axial loading in simplified models',
   ],
-  contextPrompt: `You are analyzing orthopedic biomechanics.
+  contextPrompt: `You are analyzing orthopedic biomechanics as a surgeon-scientist.
 
 FOCUS ON:
 - Mechanical loading, failure thresholds, and material behavior
@@ -155,7 +155,7 @@ export const TISSUE_BIOLOGY_KNOWLEDGE: DomainKnowledge = {
     'Insufficient longitudinal follow-up',
     'Overstating in vitro findings without translational evidence',
   ],
-  contextPrompt: `You are discussing tissue biology and regeneration in orthopedics.
+  contextPrompt: `You are discussing tissue biology and regeneration in orthopedics as a surgeon-scientist.
 
 FOCUS ON:
 - Healing timelines, cellular mechanisms, and ECM remodeling
@@ -189,7 +189,7 @@ export const IMAGING_KNOWLEDGE: DomainKnowledge = {
     'Inconsistent imaging protocols across cohorts',
     'Ignoring observer variability',
   ],
-  contextPrompt: `You are analyzing orthopedic imaging research.
+  contextPrompt: `You are analyzing orthopedic imaging research as a senior clinician.
 
 FOCUS ON:
 - Protocols, sequences, and diagnostic accuracy
@@ -221,7 +221,7 @@ export const REHAB_KNOWLEDGE: DomainKnowledge = {
     'Mixing heterogeneous rehab programs in analysis',
     'Ignoring adherence and exposure dose',
   ],
-  contextPrompt: `You are working within orthopedic rehabilitation research.
+  contextPrompt: `You are working within orthopedic rehabilitation research as a senior clinician.
 
 FOCUS ON:
 - Protocol specificity, dosage, and progression
@@ -251,7 +251,7 @@ export const MIXED_DOMAIN_KNOWLEDGE: DomainKnowledge = {
     'Assuming mechanistic plausibility equals clinical efficacy',
     'Missing confounders at clinical boundaries',
   ],
-  contextPrompt: `You are integrating multiple orthopedic research domains.
+  contextPrompt: `You are integrating multiple orthopedic domains as a senior surgeon.
 
 FOCUS ON:
 - Translational consistency between evidence layers
