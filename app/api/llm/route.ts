@@ -3,7 +3,7 @@ import { getMemoryManager } from '../../lib/memory';
 import { getTools, executeTools } from '../../lib/tools';
 import { buildContextForLLMCall } from '../../lib/domain/contextBuilder';
 import { strategyManager } from '@/app/lib/strategy/manager';
-import type { StrategyDecision, StrategyType } from '@/app/lib/strategy/types';
+import type { StrategyDecision } from '@/app/lib/strategy/types';
 import OpenAI from 'openai';
 import { getDefaultModel, getLlmApiKey, getLlmBaseUrl, getLlmChatUrl } from '@/app/lib/llm/config';
 import type { ChatCompletionMessageParam } from 'openai/resources/chat';
@@ -20,7 +20,6 @@ export const maxDuration = 3600; // 60 minutes max for complex queries (local de
 
 export async function POST(req: NextRequest) {
   // Declare strategy variables outside try block for error handling
-  let strategyEnabled = false;
   let strategyDecision: StrategyDecision | null = null;
   let strategyStartTime = Date.now();
 
@@ -34,13 +33,7 @@ export async function POST(req: NextRequest) {
       useMemory: requestedUseMemory = true,
       filePath, // Optional: file path for domain detection
       manualModeOverride, // Optional: user-selected mode ('clinical-consult' | 'surgical-planning' | 'complications-risk' | 'imaging-dx' | 'rehab-rtp' | 'evidence-brief')
-      strategyEnabled: requestStrategyEnabled = false, // NEW: Strategy system toggle
-      selectedStrategy = 'balanced', // NEW: Which strategy to use
-      workflowMode = 'auto', // NEW: Workflow mode ('auto' | 'chain' | 'ensemble')
     } = await req.json();
-
-    // Update outer scope variables
-    strategyEnabled = requestStrategyEnabled;
 
     // Initialize with requested values (may be overridden by strategy)
     let model = requestedModel;
@@ -96,48 +89,36 @@ Use markdown formatting where appropriate:
     // ============================================================
     strategyStartTime = Date.now();
 
-    if (strategyEnabled) {
-      try {
-        console.log(`[Strategy] Executing strategy: ${selectedStrategy}`);
+    try {
+      console.log('[Strategy] Executing combined workflow strategy');
 
-        // If workflow strategy is selected, configure the workflow mode
-        if (selectedStrategy === 'workflow') {
-          const { WorkflowStrategy } = await import('@/app/lib/strategy/implementations/workflowStrategy');
-          const workflowStrategy = strategyManager['strategies'].get('workflow') as InstanceType<typeof WorkflowStrategy>;
-          if (workflowStrategy && 'setWorkflowMode' in workflowStrategy) {
-            workflowStrategy.setWorkflowMode(workflowMode as 'auto' | 'chain' | 'ensemble');
-            console.log(`[Workflow] Mode set to: ${workflowMode}`);
-          }
+      strategyDecision = await strategyManager.executeStrategy(
+        'workflow',
+        {
+          userMessage: lastUserMessage?.content || '',
+          conversationHistory: messages.slice(-10),
+          manualModeOverride,
+          manualModelOverride: requestedModel
         }
+      );
 
-        strategyDecision = await strategyManager.executeStrategy(
-          selectedStrategy as StrategyType,
-          {
-            userMessage: lastUserMessage?.content || '',
-            conversationHistory: messages.slice(-10),
-            manualModeOverride,
-            manualModelOverride: requestedModel
-          }
-        );
+      // Override with strategy decision
+      model = strategyDecision.selectedModel;
+      temperature = strategyDecision.temperature;
+      maxTokens = strategyDecision.maxTokens;
+      stream = false; // Combined workflow is non-streaming
+      enableTools = strategyDecision.enableTools;
 
-        // Override with strategy decision
-        model = strategyDecision.selectedModel;
-        temperature = strategyDecision.temperature;
-        maxTokens = strategyDecision.maxTokens;
-        stream = strategyDecision.streaming;
-        enableTools = strategyDecision.enableTools;
-
-        const strategyTime = Date.now() - strategyStartTime;
-        console.log(`[Strategy] Decision made in ${strategyTime}ms:`, {
-          model: strategyDecision.selectedModel,
-          reasoning: strategyDecision.reasoning,
-          confidence: strategyDecision.confidence,
-          complexityScore: strategyDecision.complexityScore
-        });
-      } catch (error) {
-        console.error('[Strategy] Error executing strategy:', error);
-        // Continue with original values if strategy fails
-      }
+      const strategyTime = Date.now() - strategyStartTime;
+      console.log(`[Strategy] Decision made in ${strategyTime}ms:`, {
+        model: strategyDecision.selectedModel,
+        reasoning: strategyDecision.reasoning,
+        confidence: strategyDecision.confidence,
+        complexityScore: strategyDecision.complexityScore
+      });
+    } catch (error) {
+      console.error('[Strategy] Error executing strategy:', error);
+      // Continue with original values if strategy fails
     }
 
     // ============================================================
@@ -197,7 +178,7 @@ Use markdown formatting where appropriate:
     // ============================================================
     // WORKFLOW ORCHESTRATOR: Check for multi-model workflows
     // ============================================================
-    if (strategyEnabled && strategyDecision && (strategyDecision.modelChain?.enabled || strategyDecision.ensembleConfig?.enabled)) {
+    if (strategyDecision && (strategyDecision.modelChain?.enabled || strategyDecision.ensembleConfig?.enabled)) {
       try {
         console.log('[Workflow] Executing multi-model workflow');
 
@@ -252,39 +233,13 @@ Use markdown formatting where appropriate:
     // ============================================================
 
     // For streaming: use fetch for manual control
-    // ============================================================
-    // CREATE MODE INTERACTION (before streaming/non-streaming)
-    // ============================================================
-    // Store the modeInteractionId to return to frontend for voting
-    let modeInteractionId: string | undefined = undefined;
-
-    if (!strategyEnabled) {
-      try {
-        const { modeAnalytics } = await import('@/app/lib/domain/modeAnalytics');
-        const currentMode = manualModeOverride || detectedMode;
-        modeInteractionId = `mode_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-
-        await modeAnalytics.logInteraction({
-          id: modeInteractionId,
-          mode: currentMode,
-          modelUsed: model,
-          responseQuality: 0.8, // Default, will be updated by user feedback
-          responseTime: 0, // Will be updated after response completes
-          tokensUsed: 0, // Will be updated after response completes
-          userFeedback: null
-        });
-        console.log(`[Mode] Interaction logged: ${currentMode} (${modeInteractionId})`);
-      } catch (error) {
-        console.warn('[Mode] Error logging interaction:', error);
-      }
-    }
-
     if (stream) {
       const body: any = {
         model,
         messages: enhancedMessages,
         temperature: temperature,
         top_p: 0.85,
+        max_tokens: maxTokens,
         stream: true,
       };
 
@@ -333,8 +288,7 @@ Use markdown formatting where appropriate:
               if (!reader) throw new Error('No response body');
 
               // Send metadata first for frontend feedback tracking
-              // Either strategy decision or mode interaction
-              if (strategyEnabled && strategyDecision) {
+              if (strategyDecision) {
                 const metadataChunk = {
                   type: 'metadata',
                   decisionId: strategyDecision.id,
@@ -343,18 +297,6 @@ Use markdown formatting where appropriate:
                   complexity: strategyDecision.complexityScore,
                   temperature: temperature,
                   maxTokens: maxTokens,
-                  modelUsed: model
-                };
-                controller.enqueue(
-                  new TextEncoder().encode(`data: ${JSON.stringify(metadataChunk)}\n\n`)
-                );
-              } else if (modeInteractionId) {
-                // Send mode interaction ID for voting without strategy
-                const metadataChunk = {
-                  type: 'metadata',
-                  decisionId: modeInteractionId,
-                  conversationId: currentConversationId,
-                  mode: manualModeOverride || detectedMode,
                   modelUsed: model
                 };
                 controller.enqueue(
@@ -423,7 +365,7 @@ Use markdown formatting where appropriate:
               // ============================================================
               // LOG STRATEGY OUTCOME (streaming)
               // ============================================================
-              if (strategyEnabled && strategyDecision) {
+              if (strategyDecision) {
                 try {
                   const responseTime = Date.now() - strategyStartTime;
                   await strategyManager.logOutcome(strategyDecision.id, {
@@ -437,23 +379,6 @@ Use markdown formatting where appropriate:
                   console.log(`[Strategy] Outcome logged for decision ${strategyDecision.id}`);
                 } catch (error) {
                   console.warn('[Strategy] Error logging outcome:', error);
-                }
-              }
-
-              // ============================================================
-              // UPDATE MODE INTERACTION METRICS (streaming)
-              // ============================================================
-              if (!strategyEnabled && modeInteractionId) {
-                try {
-                  const { modeAnalytics } = await import('@/app/lib/domain/modeAnalytics');
-                  const responseTime = Date.now() - strategyStartTime;
-                  const tokensUsed = Math.floor(fullContent.length / 4); // Rough estimate
-
-                  // Update with actual metrics (quality will be updated by user feedback later)
-                  await modeAnalytics.updateMetrics(modeInteractionId, responseTime, tokensUsed);
-                  console.log(`[Mode] Metrics updated: ${modeInteractionId} (${responseTime}ms, ${tokensUsed} tokens)`);
-                } catch (error) {
-                  console.warn('[Mode] Error updating metrics:', error);
                 }
               }
 
@@ -479,6 +404,7 @@ Use markdown formatting where appropriate:
       messages: enhancedMessages,
       temperature: temperature,
       top_p: 0.85,
+      max_tokens: maxTokens,
       stream: false,
       tools: enableTools ? getTools() : undefined,
       tool_choice: enableTools ? 'auto' : undefined,
@@ -510,6 +436,7 @@ Use markdown formatting where appropriate:
           currentCompletion = await openai.chat.completions.create({
             model,
             messages: allMessages,
+            max_tokens: maxTokens,
             stream: false,
           } as any);
           continue;
@@ -565,6 +492,7 @@ Use markdown formatting where appropriate:
                 currentCompletion = await openai.chat.completions.create({
                   model,
                   messages: allMessages,
+                  max_tokens: maxTokens,
                   stream: false,
                 } as any);
                 continue;
@@ -600,7 +528,7 @@ Use markdown formatting where appropriate:
     // ============================================================
     // LOG STRATEGY OUTCOME (non-streaming)
     // ============================================================
-    if (strategyEnabled && strategyDecision) {
+    if (strategyDecision) {
       try {
         const responseTime = Date.now() - strategyStartTime;
         const tokensUsed = currentCompletion.usage?.total_tokens || assistantMessage.length / 4;
@@ -619,36 +547,19 @@ Use markdown formatting where appropriate:
       }
     }
 
-    // ============================================================
-    // UPDATE MODE INTERACTION METRICS (non-streaming)
-    // ============================================================
-    if (!strategyEnabled && modeInteractionId) {
-      try {
-        const { modeAnalytics } = await import('@/app/lib/domain/modeAnalytics');
-        const responseTime = Date.now() - strategyStartTime;
-        const tokensUsed = currentCompletion.usage?.total_tokens || Math.floor(assistantMessage.length / 4);
-
-        await modeAnalytics.updateMetrics(modeInteractionId, responseTime, tokensUsed);
-        console.log(`[Mode] Metrics updated: ${modeInteractionId} (${responseTime}ms, ${tokensUsed} tokens)`);
-      } catch (error) {
-        console.warn('[Mode] Error updating metrics:', error);
-      }
-    }
-
     // Return response with conversation ID, auto-selected model, decision ID, and learning metadata
     const responsePayload: any = {
       ...currentCompletion.choices[0].message,
       conversationId: currentConversationId,
-      autoSelectedModel: strategyEnabled ? model : undefined,
-      // Return either strategy decisionId or mode interactionId for voting
-      decisionId: strategyEnabled && strategyDecision ? strategyDecision.id : modeInteractionId,
-      metadata: strategyEnabled && strategyDecision ? {
+      autoSelectedModel: model,
+      decisionId: strategyDecision ? strategyDecision.id : undefined,
+      metadata: strategyDecision ? {
         detectedTheme: strategyDecision.metadata?.detectedTheme,
         complexityScore: strategyDecision.complexityScore,
         temperature: temperature,
         maxTokens: maxTokens
       } : undefined,
-      modeUsed: strategyEnabled ? undefined : (manualModeOverride || detectedMode)
+      modeUsed: manualModeOverride || detectedMode
     };
 
     return NextResponse.json(responsePayload);
@@ -656,7 +567,7 @@ Use markdown formatting where appropriate:
     console.error('[LLM API] Error:', error);
 
     // Log error outcome if strategy was used
-    if (strategyEnabled && strategyDecision) {
+    if (strategyDecision) {
       try {
         const responseTime = Date.now() - strategyStartTime;
         await strategyManager.logOutcome(strategyDecision.id, {

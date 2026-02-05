@@ -11,9 +11,9 @@ export default function TopNav({
   messageCount,
 }: TopNavProps) {
   return (
-    <nav className="sticky top-0 z-50 w-full">
+    <nav className="sticky top-0 z-50 w-full shrink-0">
       {/* Main Navigation Container with Vibrant Gradient */}
-      <div className="w-full bg-gradient-to-r from-cyan-light via-teal to-peach shadow-2xl border-b-4 border-black/20"
+      <div className="w-full bg-linear-to-r from-cyan-light via-teal to-peach shadow-2xl border-b-4 border-black/20"
       >
         <div className="max-w-full mx-auto px-8 py-5">
           {/* Top Row: Branding + Controls */}
@@ -24,7 +24,7 @@ export default function TopNav({
                 🦴 OrthoAI
               </h1>
               <p className="text-slate-800 text-xs font-bold tracking-widest uppercase group-hover:text-slate-700 transition-colors">
-                Orthopedic Research Intelligence
+                Orthopedic Assistant
               </p>
             </Link>
 

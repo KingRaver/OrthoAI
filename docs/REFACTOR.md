@@ -11,7 +11,7 @@ We started from the **Hacker Reign** template:
 - Coding‑focused domain detection and prompts
 
 ## 2) Refactor Objectives
-- Shift from coding assistant → **orthopedic research intelligence**
+- Shift from coding assistant → **orthopedic intelligence**
 - Replace Ollama‑specific assumptions with **llama.cpp**
 - Reduce model set to **2 specialized biomedical models**
 - Preserve analytics and memory/RAG

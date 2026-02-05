@@ -6,6 +6,16 @@ const nextConfig: NextConfig = {
     optimizePackageImports: ['openai']
   },
 
+  // Prevent Next/Turbopack from trying to bundle Chroma deps that ship TS/MD sources
+  serverExternalPackages: [
+    'chromadb',
+    '@chroma-core/default-embed',
+    '@chroma-core/ai-embeddings-common',
+    '@huggingface/transformers',
+    'onnxruntime-node',
+    'sharp'
+  ],
+
   images: {
     remotePatterns: [{ protocol: 'https', hostname: '**' }],
     minimumCacheTTL: 3600

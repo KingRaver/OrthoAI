@@ -15,11 +15,12 @@
     "chroma-stop": "docker stop chromadb"
   },
   "dependencies": {
+    "@chroma-core/default-embed": "^0.1.9",
     "ai": "^6.0.20",
     "better-sqlite3": "^12.5.0",
     "chromadb": "^3.2.0",
     "mathjs": "^15.1.0",
-    "next": "16.1.1",
+    "next": "^16.1.6",
     "openai": "^6.15.0",
     "pyodide": "^0.29.1",
     "react": "19.2.3",
@@ -30,7 +31,7 @@
     "zod": "^4.3.5"
   },
   "devDependencies": {
-    "@next/bundle-analyzer": "^16.1.1",
+    "@next/bundle-analyzer": "^16.1.6",
     "@tailwindcss/postcss": "^4",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^20",
@@ -38,7 +39,7 @@
     "@types/react-dom": "^19",
     "@types/three": "^0.182.0",
     "eslint": "^9",
-    "eslint-config-next": "16.1.1",
+    "eslint-config-next": "^16.1.6",
     "postcss": "^8.5.1",
     "tailwindcss": "^4",
     "typescript": "^5"

@@ -7,6 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Bug Fix] - 2026-02-05 - Fit Chat Layout to Viewport
+
+### Fixed
+- Removed double `100vh` sizing and padding overflow that forced page scrolling.
+- Switched the home page container to `100dvh` with overflow hidden for mobile-safe sizing.
+- Prevented the sticky top nav from shrinking inside the new flex layout.
+
+### Modified Files
+- `components/Chat.tsx`
+- `app/page.tsx`
+- `components/TopNav.tsx`
+
+## [Changed] - 2026-02-05 - Workflow-First Combined Strategy
+
+### Added
+- Always-on strategy analytics cleanup with 90-day retention.
+- Combined workflow execution path (ensemble draft → chain refinement).
+
+### Changed
+- Strategy is now workflow-only and always enabled in the LLM API.
+- Workflow execution now supports seeding chain refinement from ensemble consensus.
+- Resource constraints are disabled to prevent throttling/downgrades.
+- Toolbar UI no longer exposes strategy/mode selection and reflects the combined workflow.
+- Removed workflow/models status display from the toolbar UI.
+
+### Removed
+- Strategy toggle, strategy selector, and workflow mode selector from the toolbar UI.
+- Mode-interaction analytics branches tied to “strategy disabled” paths.
+
+### Modified Files
+- `app/api/llm/route.ts`
+- `app/lib/strategy/implementations/workflowStrategy.ts`
+- `app/lib/strategy/orchestrator.ts`
+- `app/lib/strategy/workflows/chain.ts`
+- `app/lib/strategy/manager.ts`
+- `app/lib/strategy/resources/constraints.ts`
+- `app/lib/strategy/analytics/tracker.ts`
+- `app/lib/strategy/README.md`
+- `components/LeftToolbar.tsx`
+- `components/Chat.tsx`
+- `docs/FUTURE_STRATEGY.md`
+
+## [Bug Fix] - 2026-02-05 - Honor max_tokens Across LLM Calls
+
+### Fixed
+- LLM requests now pass `max_tokens` for both streaming and non-streaming chat completions.
+- Workflow chain and ensemble executions now respect the strategy `maxTokens` cap.
+
+### Changed
+- Chain workflow steps now clamp per-step `maxTokens` to the overall workflow limit to avoid overruns.
+
+### Modified Files
+- `app/api/llm/route.ts`
+- `app/lib/strategy/workflows/chain.ts`
+- `app/lib/strategy/workflows/ensemble.ts`
+- `app/lib/strategy/orchestrator.ts`
+
 ## [Documentation] - 2026-02-05 - Fix BioMistral Startup Instructions
 
 ### Added

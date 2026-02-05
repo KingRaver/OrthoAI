@@ -262,12 +262,7 @@ export interface ComplexitySignals {
 // ============================================================
 
 export type StrategyType =
-  | 'balanced'      // Complexity-based (MVP)
-  | 'speed'         // Always fast models
-  | 'quality'       // Always best models
-  | 'cost'          // Token optimization
-  | 'adaptive'      // ML-driven with feedback learning
-  | 'workflow';     // Multi-model workflows (Chain & Ensemble)
+  | 'workflow';     // Single combined workflow (ensemble + chain)
 
 export type ModelSize = '3B' | '7B' | '14B' | '16B' | '32B';
 

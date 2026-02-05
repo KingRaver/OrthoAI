@@ -1,8 +1,4 @@
 // app/lib/strategy/manager.ts
-import { ComplexityStrategy } from './implementations/complexityStrategy';
-import { SpeedStrategy } from './implementations/speedStrategy';
-import { QualityStrategy } from './implementations/qualityStrategy';
-import { CostStrategy } from './implementations/costStrategy';
 import { StrategyAnalytics } from './analytics/tracker';
 import { buildStrategyContext } from './context';
 import { BaseStrategy } from './baseStrategy';
@@ -13,9 +9,7 @@ import {
   StrategyOutcome,
   PerformanceMetrics
 } from './types';
-import { AdaptiveStrategy } from './implementations/adaptiveStrategy';
 import { WorkflowStrategy } from './implementations/workflowStrategy';
-import { withResourceConstraints } from './resources/constraints';
 
 /**
  * Strategy Manager
@@ -32,16 +26,11 @@ export class StrategyManager {
   }
 
   private registerStrategies() {
-    this.strategies.set('balanced', new ComplexityStrategy());
-    this.strategies.set('speed', new SpeedStrategy());
-    this.strategies.set('quality', new QualityStrategy());
-    this.strategies.set('cost', new CostStrategy());
-    this.strategies.set('adaptive', new AdaptiveStrategy());
     this.strategies.set('workflow', new WorkflowStrategy());
   }
 
   async executeStrategy(
-    strategyType: StrategyType = 'balanced',
+    _strategyType: StrategyType = 'workflow',
     rawContext: Partial<StrategyContext>
   ): Promise<StrategyDecision> {
     try {
@@ -53,16 +42,14 @@ export class StrategyManager {
         manualModelOverride: rawContext.manualModelOverride
       });
 
-      // Get strategy (fallback to balanced)
-      const strategy = this.strategies.get(strategyType) || 
-                      this.strategies.get('balanced')!;
+      // Workflow-first: always use the combined workflow strategy
+      const strategy = this.strategies.get('workflow')!;
 
       // Pre-process
       await strategy.preProcess(context);
 
-      // Execute decision with resource constraints
-      const rawDecision = await strategy.decide(context);
-      const decision = await withResourceConstraints(async () => rawDecision, context);
+      // Execute decision (no throttles or resource gating)
+      const decision = await strategy.decide(context);
 
       // Cap maxTokens to model context window when available
       const selectedModelInfo = context.availableModels.find(m => m.name === decision.selectedModel);

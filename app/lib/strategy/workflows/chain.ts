@@ -16,6 +16,7 @@ export class ModelChainWorkflow {
       maxTotalTokens?: number;
       timeoutMs?: number;
       mergeStrategy?: 'last' | 'concat' | 'vote';
+      initialResponse?: string;
     } = {}
   ): Promise<{
     finalResponse: string;
@@ -26,7 +27,7 @@ export class ModelChainWorkflow {
     const startTime = Date.now();
     let totalTokens = 0;
     const chainResults: ChainStepResult[] = [];
-    let currentResponse = '';
+    let currentResponse = options.initialResponse || '';
 
     console.log(`[Chain] Starting ${config.steps.length}-step chain`);
 
@@ -35,11 +36,16 @@ export class ModelChainWorkflow {
       const stepStart = Date.now();
 
       try {
+        const stepMaxTokens = typeof options.maxTotalTokens === 'number'
+          ? Math.min(step.maxTokens ?? options.maxTotalTokens, options.maxTotalTokens)
+          : step.maxTokens;
+
         const stepResult = await this.executeChainStep(
           step,
           messages,
           currentResponse,
-          i === config.steps.length - 1
+          i === config.steps.length - 1,
+          stepMaxTokens
         );
 
         chainResults.push(stepResult);
@@ -76,7 +82,8 @@ export class ModelChainWorkflow {
     step: ModelChainStep,
     baseMessages: ChatCompletionMessageParam[],
     previousOutput: string,
-    isFinalStep: boolean
+    isFinalStep: boolean,
+    maxTokens?: number
   ): Promise<ChainStepResult> {
     const stepStart = Date.now();
 
@@ -88,10 +95,11 @@ export class ModelChainWorkflow {
       critique: `CRITIC MODE. Identify weaknesses, confounders, and alternative explanations:\n\n"""${previousOutput}"""`
     };
 
+    const stepSuffix = step.systemPromptSuffix ? ` ${step.systemPromptSuffix}` : '';
     const messages: ChatCompletionMessageParam[] = [
       {
         role: 'system',
-        content: `${rolePrompts[step.role]} ${isFinalStep ? 'This is FINAL OUTPUT — make it publication-ready.' : ''}\nRespond with improved analysis and structured output.`
+        content: `${rolePrompts[step.role]}${stepSuffix} ${isFinalStep ? 'This is FINAL OUTPUT — make it publication-ready.' : ''}\nRespond with improved analysis and structured output.`
       },
       ...baseMessages.slice(-8),
       {
@@ -100,13 +108,16 @@ export class ModelChainWorkflow {
       }
     ];
 
-    const body = {
+    const body: any = {
       model: step.model,
       messages,
       temperature: step.temperature || (isFinalStep ? 0.3 : 0.6),
       top_p: 0.9,
       stream: false,
     };
+    if (typeof maxTokens === 'number') {
+      body.max_tokens = maxTokens;
+    }
 
     const response = await fetch(getLlmChatUrl(), {
       method: 'POST',

@@ -10,6 +10,7 @@ import fs from 'fs';
  */
 
 const DB_PATH = path.join(process.cwd(), '.data', 'strategy_analytics.db');
+const STRATEGY_ANALYTICS_RETENTION_DAYS = 90;
 
 export class StrategyAnalytics {
   private db!: sqlite3.Database; // Using definite assignment assertion
@@ -54,6 +55,9 @@ export class StrategyAnalytics {
         FOREIGN KEY (decision_id) REFERENCES strategy_decisions(id)
       );
     `);
+
+    // Always-on cleanup (no toggle)
+    void this.cleanupOldData(STRATEGY_ANALYTICS_RETENTION_DAYS);
   }
 
   async logDecision(decision: StrategyDecision): Promise<string> {
@@ -76,6 +80,7 @@ export class StrategyAnalytics {
       decision.timestamp.toISOString()
     ]);
 
+    void this.cleanupOldData(STRATEGY_ANALYTICS_RETENTION_DAYS);
     return decisionId;
   }
 
@@ -98,6 +103,8 @@ export class StrategyAnalytics {
       outcome.userFeedback || null,
       new Date().toISOString()
     ]);
+
+    void this.cleanupOldData(STRATEGY_ANALYTICS_RETENTION_DAYS);
   }
 
   async getStrategyPerformance(strategyName: string): Promise<PerformanceMetrics> {
@@ -194,7 +201,7 @@ export class StrategyAnalytics {
     };
   }
 
-  async cleanupOldData(days = 30): Promise<void> {
+  async cleanupOldData(days = STRATEGY_ANALYTICS_RETENTION_DAYS): Promise<void> {
     const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
     this.db.exec(`DELETE FROM strategy_outcomes WHERE created_at < '${cutoff}'`);
     this.db.exec(`DELETE FROM strategy_decisions WHERE created_at < '${cutoff}'`);

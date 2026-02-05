@@ -27,22 +27,20 @@ interface Message {
 }
 
 export default function Chat() {
+  const DEFAULT_MODEL = 'biomistral-7b-instruct';
+  const WORKFLOW_LABEL = 'BioGPT + BioMistral';
+
   // State Management - Chat owns conversation state
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [autoSelectedModel, setAutoSelectedModel] = useState<string>('');
   const [conversationId, setConversationId] = useState<string | null>(null);
 
   // Settings come from LeftToolbar
   const [currentSettings, setCurrentSettings] = useState<ToolbarSettings>({
     manualMode: '',
-    selectedStrategy: 'balanced',
-    workflowMode: 'auto',
-    model: 'biomistral-7b-instruct',
     enableTools: false,
     voiceEnabled: false,
-    strategyEnabled: false,
     memoryConsent: false,
   });
   
@@ -51,12 +49,6 @@ export default function Chat() {
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const userHasScrolledUp = useRef(false);
-
-  // Models Configuration
-  const models = [
-    { id: 'biomistral-7b-instruct', name: 'BioMistral 7B', speed: '🧬' },
-    { id: 'biogpt', name: 'BioGPT', speed: '⚗️' }
-  ];
 
   // Voice flow hook - handles STT, TTS, and seamless conversation loop
   const voice = useVoiceFlow({
@@ -175,23 +167,19 @@ export default function Chat() {
       }
 
       // Send to LLM API
-      // Workflow doesn't support streaming, so force stream: false when workflow is selected
-      const isWorkflow = currentSettings.strategyEnabled && currentSettings.selectedStrategy === 'workflow';
-      const shouldStream = !currentSettings.enableTools && !isWorkflow;
+      // Combined workflow is non-streaming by design
+      const shouldStream = false;
 
       const response = await fetch('/api/llm', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: currentSettings.model,
+          model: DEFAULT_MODEL,
           messages: [...messages, userMsg],
           stream: shouldStream,
           enableTools: currentSettings.enableTools,
           useMemory: currentSettings.memoryConsent,
           manualModeOverride: currentSettings.manualMode || undefined,
-          strategyEnabled: currentSettings.strategyEnabled,
-          selectedStrategy: currentSettings.strategyEnabled ? currentSettings.selectedStrategy : undefined,
-          workflowMode: currentSettings.selectedStrategy === 'workflow' ? currentSettings.workflowMode : undefined,
           conversationId: conversationId || undefined
         })
       });
@@ -221,7 +209,7 @@ export default function Chat() {
             temperature: data.metadata?.temperature,
             maxTokens: data.metadata?.maxTokens,
             toolsEnabled: currentSettings.enableTools,
-            modelUsed: data.autoSelectedModel || currentSettings.model,
+            modelUsed: data.model || data.autoSelectedModel || DEFAULT_MODEL,
             responseTime,
             tokensUsed: Math.floor(content.length / 4), // Rough estimate
             mode: data.modeUsed || currentSettings.manualMode || 'auto' // Track which mode was used
@@ -229,11 +217,6 @@ export default function Chat() {
         };
 
         setMessages(prev => [...prev, aiMsg]);
-
-        // Update auto-selected model if strategy is enabled
-        if (currentSettings.strategyEnabled && data.autoSelectedModel) {
-          setAutoSelectedModel(data.autoSelectedModel);
-        }
 
         // Speak response if voice enabled (strip markdown for natural speech)
         if (currentSettings.voiceEnabled && content) {
@@ -283,7 +266,7 @@ export default function Chat() {
                         temperature: parsed.temperature,
                         maxTokens: parsed.maxTokens,
                         toolsEnabled: currentSettings.enableTools,
-                        modelUsed: parsed.modelUsed || currentSettings.model,
+                        modelUsed: parsed.modelUsed || DEFAULT_MODEL,
                         responseTime: 0,
                         tokensUsed: 0,
                         mode: currentSettings.manualMode || 'auto'
@@ -325,7 +308,7 @@ export default function Chat() {
                       temperature: parsed.temperature,
                       maxTokens: parsed.maxTokens,
                       toolsEnabled: currentSettings.enableTools,
-                      modelUsed: parsed.modelUsed || currentSettings.model,
+                        modelUsed: parsed.modelUsed || DEFAULT_MODEL,
                       responseTime: 0,
                       tokensUsed: 0,
                       mode: currentSettings.manualMode || 'auto'
@@ -357,7 +340,7 @@ export default function Chat() {
                     ...msg,
                     decisionId: finalDecisionId,
                     learningContext: streamLearningContext || {
-                      modelUsed: currentSettings.model,
+                      modelUsed: DEFAULT_MODEL,
                       responseTime,
                       tokensUsed: Math.floor(fullContent.length / 4),
                       mode: currentSettings.manualMode || 'auto'
@@ -434,19 +417,17 @@ export default function Chat() {
   };
 
   return (
-    <>
+    <div className="flex h-full w-full flex-col overflow-hidden">
       {/* Sticky Top Navigation */}
       <TopNav
         messageCount={messages.length}
       />
 
       {/* Main Chat Container - Professional Light Background */}
-      <div className="pt-16 pb-8 px-6 h-screen overflow-hidden bg-gradient-to-br from-slate-50 via-cyan-50/30 to-slate-50">
-        <div className="max-w-6xl mx-auto flex flex-col gap-4 h-full overflow-hidden">
+      <div className="flex-1 min-h-0 px-6 pb-8 pt-6 overflow-hidden box-border bg-gradient-to-br from-slate-50 via-cyan-50/30 to-slate-50">
+        <div className="max-w-6xl mx-auto flex flex-col gap-4 h-full min-h-0 overflow-hidden">
           <div className="flex flex-col md:flex-row gap-6 flex-1 min-h-0">
             <LeftToolbar
-              models={models}
-              autoSelectedModel={autoSelectedModel}
               onSettingsChange={setCurrentSettings}
             />
             <div className="flex-1 flex flex-col gap-6 min-h-0">
@@ -565,7 +546,7 @@ export default function Chat() {
                             <div className="w-2.5 h-2.5 bg-yellow rounded-full animate-bounce [animation-delay:0.2s]" />
                           </div>
                           <span className="text-xs font-medium text-slate-600 ml-1">
-                            {currentSettings.voiceEnabled ? 'Listening...' : 'Thinking...'} ({currentSettings.model.split(':')[0]})
+                            {currentSettings.voiceEnabled ? 'Listening...' : 'Thinking...'} ({WORKFLOW_LABEL})
                           </span>
                         </div>
                       </div>
@@ -635,7 +616,7 @@ export default function Chat() {
 
           {/* Footer - Status Info */}
           <div className="text-xs text-slate-500 text-center pt-4 border-t border-cyan-light/20 font-medium tracking-widest">
-            🔒 Offline • M4 Optimized • {currentSettings.model.split(':')[0]} • {messages.length} messages
+            🔒 Offline • M4 Optimized • {WORKFLOW_LABEL} • {messages.length} messages
             {currentSettings.manualMode && ` • ${
               currentSettings.manualMode === 'clinical-consult'
                 ? '🩺'
@@ -653,6 +634,6 @@ export default function Chat() {
           </div>
         </div>
       </div>
-    </>
+    </div>
   );
 }

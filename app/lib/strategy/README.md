@@ -2,6 +2,8 @@
 
 An intelligent multi-model orchestration system that automatically selects optimal models, parameters, and execution strategies based on task complexity, system resources, and historical performance.
 
+> **Note:** The system is now workflow-first and always-on. See `docs/FUTURE_STRATEGY.md` for the current design target and refactor template.
+
 ## Overview
 
 The strategy system dynamically routes requests to the most appropriate model (3B, 7B, or 16B) and configures parameters based on:

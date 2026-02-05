@@ -13,10 +13,11 @@ export class EnsembleWorkflow {
     config: EnsembleConfig,
     messages: any[],
     _question: string,
+    options: { maxTokens?: number } = {},
   ): Promise<EnsembleResult> {
     const startTime = Date.now();
     const results = await Promise.allSettled(
-      config.models.map(model => this.runModelResponse(model, messages))
+      config.models.map(model => this.runModelResponse(model, messages, options.maxTokens))
     );
 
     const successfulResults = results
@@ -50,14 +51,18 @@ export class EnsembleWorkflow {
 
   private static async runModelResponse(
     model: string,
-    messages: any[]
+    messages: any[],
+    maxTokens?: number
   ): Promise<ModelResponse> {
-    const body = {
+    const body: any = {
       model,
       messages,
       temperature: 0.3,
       stream: false,
     };
+    if (typeof maxTokens === 'number') {
+      body.max_tokens = maxTokens;
+    }
 
     // Undici is configured globally in instrumentation.ts with no timeouts
     const fetchResponse = await fetch(getLlmChatUrl(), {
