@@ -1,0 +1,12 @@
+{
+  "inputs": [
+    "def async fetch_data(url):",
+    "function useAsyncData() {",
+    "import React from 'react';"
+  ],
+  "targets": [
+    "    async with aiohttp.ClientSession() as session:",
+    "  const [data, setData] = useState(null);",
+    "export default function Component() {}"
+  ]
+}
