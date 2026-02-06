@@ -17,10 +17,12 @@ export abstract class BaseStrategy {
   // Optional hooks
   async preProcess(context: StrategyContext): Promise<void> {
     // Override for pre-processing (caching, validation, etc.)
+    void context;
   }
 
   async postProcess(decision: StrategyDecision): Promise<void> {
     // Override for post-processing (logging, validation, etc.)
+    void decision;
   }
 
   // Analytics integration
@@ -29,6 +31,7 @@ export abstract class BaseStrategy {
     outcome: StrategyOutcome
   ): Promise<void> {
     // Default implementation - override for custom analytics
+    void outcome;
     console.log(`[Strategy:${this.name}] Decision recorded:`, {
       model: decision.selectedModel,
       confidence: decision.confidence,

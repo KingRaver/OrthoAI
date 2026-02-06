@@ -13,6 +13,7 @@ const DB_PATH = path.join(process.cwd(), '.data', 'parameter_tuning.db');
 export interface ParameterProfile {
   theme: string;
   complexity: number;
+  complexityBucket: number;
   optimalTemperature: number;
   optimalMaxTokens: number;
   enableTools: boolean;
@@ -29,8 +30,44 @@ export interface TuningRecommendation {
   reasoning: string;
 }
 
+type DbProfileRow = {
+  id: string;
+  theme: string;
+  complexity_bucket: number;
+  optimal_temperature: number;
+  optimal_max_tokens: number;
+  enable_tools: number | null;
+  avg_quality: number;
+  sample_size: number;
+  last_updated: string;
+};
+
+type DbProfileAggregateRow = {
+  avg_temp: number | null;
+  avg_tokens: number | null;
+  avg_quality: number | null;
+  count: number | null;
+  common_tools: number | null;
+};
+
+type DbTopExperimentRow = {
+  temperature: number;
+  max_tokens: number;
+  tools_enabled: number;
+  quality_score: number;
+};
+
+type DbAnalyticsRow = {
+  theme: string;
+  avg_temperature: number | null;
+  avg_quality: number | null;
+  sample_size: number | null;
+};
+
 export class ParameterTuner {
   private db!: sqlite3.Database;
+  private static BUCKET_COUNT = 10;
+  private static BUCKET_SIZE = 10;
 
   constructor() {
     this.initDatabase();
@@ -78,6 +115,31 @@ export class ParameterTuner {
       CREATE INDEX IF NOT EXISTS idx_experiments_theme ON parameter_experiments(theme);
       CREATE INDEX IF NOT EXISTS idx_experiments_decision ON parameter_experiments(decision_id);
     `);
+
+    const legacyStats = this.db.prepare(`
+      SELECT COUNT(*) as count, MAX(complexity_bucket) as max_bucket
+      FROM parameter_profiles
+    `).get() as { count: number; max_bucket: number | null };
+
+    if (legacyStats.count > 0 && (legacyStats.max_bucket ?? 0) <= 2) {
+      const mapping = [1, 5, 8];
+      const rows = this.db.prepare(`SELECT id, theme, complexity_bucket FROM parameter_profiles`).all() as Array<{
+        id: string;
+        theme: string;
+        complexity_bucket: number;
+      }>;
+      const updateStmt = this.db.prepare(`
+        UPDATE parameter_profiles
+        SET id = ?, complexity_bucket = ?
+        WHERE id = ?
+      `);
+      rows.forEach(row => {
+        const mappedBucket = mapping[row.complexity_bucket] ?? row.complexity_bucket;
+        const newId = `profile_${row.theme}_${mappedBucket}`;
+        updateStmt.run(newId, mappedBucket, row.id);
+      });
+      console.log('[Tuner] Migrated legacy 3-bucket profiles to 10-bucket layout');
+    }
   }
 
   /**
@@ -87,26 +149,16 @@ export class ParameterTuner {
     theme: string,
     complexity: number
   ): Promise<TuningRecommendation> {
-    // Bucket complexity into ranges (0-33, 34-66, 67-100)
-    const complexityBucket = Math.floor(complexity / 34);
+    const complexityBucket = this.getComplexityBucket(complexity);
 
     // Try to get exact match first
-    let profile = await this.getProfile(theme, complexityBucket);
+    const profile = await this.getProfile(theme, complexityBucket);
 
     // If no exact match, try adjacent buckets
     if (!profile || profile.sampleSize < 3) {
-      const adjacentProfiles = await Promise.all([
-        this.getProfile(theme, Math.max(0, complexityBucket - 1)),
-        this.getProfile(theme, Math.min(2, complexityBucket + 1))
-      ]);
-
-      // Use the profile with the most samples
-      const bestProfile = adjacentProfiles
-        .filter(p => p && p.sampleSize >= 3)
-        .sort((a, b) => b!.sampleSize - a!.sampleSize)[0];
-
-      if (bestProfile) {
-        profile = bestProfile;
+      const interpolated = await this.interpolateProfiles(theme, complexityBucket, complexity);
+      if (interpolated) {
+        return interpolated;
       }
     }
 
@@ -137,13 +189,15 @@ export class ParameterTuner {
       WHERE theme = ? AND complexity_bucket = ?
     `);
 
-    const row = stmt.get(theme, complexityBucket) as any;
+    const row = stmt.get(theme, complexityBucket) as DbProfileRow | undefined;
 
     if (!row) return null;
 
+    const midpoint = this.getBucketMidpoint(complexityBucket);
     return {
       theme: row.theme,
-      complexity: row.complexity_bucket * 34 + 17, // midpoint of bucket
+      complexity: midpoint,
+      complexityBucket: row.complexity_bucket,
       optimalTemperature: row.optimal_temperature,
       optimalMaxTokens: row.optimal_max_tokens,
       enableTools: Boolean(row.enable_tools),
@@ -199,7 +253,7 @@ export class ParameterTuner {
    * Update parameter profile based on accumulated experiments
    */
   private async updateProfile(theme: string, complexity: number): Promise<void> {
-    const complexityBucket = Math.floor(complexity / 34);
+    const complexityBucket = this.getComplexityBucket(complexity);
 
     // Get all experiments for this theme/complexity bucket
     const stmt = this.db.prepare(`
@@ -217,11 +271,18 @@ export class ParameterTuner {
       WHERE theme = ? AND complexity >= ? AND complexity < ?
     `);
 
-    const bucketMin = complexityBucket * 34;
-    const bucketMax = (complexityBucket + 1) * 34;
-    const row = stmt.get(theme, bucketMin, bucketMax, theme, bucketMin, bucketMax) as any;
+    const { bucketMin, bucketMax } = this.getBucketRange(complexityBucket);
+    const row = stmt.get(
+      theme,
+      bucketMin,
+      bucketMax,
+      theme,
+      bucketMin,
+      bucketMax
+    ) as DbProfileAggregateRow | undefined;
 
-    if (row && row.count > 0) {
+    const sampleCount = row?.count ?? 0;
+    if (row && sampleCount > 0) {
       // Calculate weighted optimal parameters (prefer higher quality results)
       const optimalStmt = this.db.prepare(`
         SELECT temperature, max_tokens, tools_enabled, quality_score
@@ -231,7 +292,7 @@ export class ParameterTuner {
         LIMIT 5
       `);
 
-      const topResults = optimalStmt.all(theme, bucketMin, bucketMax) as any[];
+      const topResults = optimalStmt.all(theme, bucketMin, bucketMax) as DbTopExperimentRow[];
 
       if (topResults.length > 0) {
         // Weight by quality score
@@ -260,6 +321,8 @@ export class ParameterTuner {
 
         const now = new Date().toISOString();
         const profileId = `profile_${theme}_${complexityBucket}`;
+        const commonTools = row.common_tools ?? 0;
+        const avgQuality = row.avg_quality ?? 0;
 
         upsertStmt.run(
           profileId,
@@ -267,21 +330,103 @@ export class ParameterTuner {
           complexityBucket,
           optimalTemp,
           optimalTokens,
-          row.common_tools || 0,
-          row.avg_quality,
-          row.count,
+          commonTools,
+          avgQuality,
+          sampleCount,
           now,
           optimalTemp,
           optimalTokens,
-          row.common_tools || 0,
-          row.avg_quality,
-          row.count,
+          commonTools,
+          avgQuality,
+          sampleCount,
           now
         );
 
-        console.log(`[Tuner] Updated profile for ${theme}/${complexityBucket}: temp=${optimalTemp.toFixed(2)}, tokens=${optimalTokens}, samples=${row.count}`);
+        console.log(`[Tuner] Updated profile for ${theme}/${complexityBucket}: temp=${optimalTemp.toFixed(2)}, tokens=${optimalTokens}, samples=${sampleCount}`);
       }
     }
+  }
+
+  private getComplexityBucket(complexity: number): number {
+    const bucket = Math.floor(complexity / ParameterTuner.BUCKET_SIZE);
+    return Math.min(ParameterTuner.BUCKET_COUNT - 1, Math.max(0, bucket));
+  }
+
+  private getBucketRange(bucket: number): { bucketMin: number; bucketMax: number } {
+    const bucketMin = bucket * ParameterTuner.BUCKET_SIZE;
+    const bucketMax = bucket === ParameterTuner.BUCKET_COUNT - 1
+      ? 101
+      : bucketMin + ParameterTuner.BUCKET_SIZE;
+    return { bucketMin, bucketMax };
+  }
+
+  private getBucketMidpoint(bucket: number): number {
+    const { bucketMin, bucketMax } = this.getBucketRange(bucket);
+    return Math.round((bucketMin + bucketMax - 1) / 2);
+  }
+
+  private async interpolateProfiles(
+    theme: string,
+    targetBucket: number,
+    complexity: number
+  ): Promise<TuningRecommendation | null> {
+    const stmt = this.db.prepare(`
+      SELECT * FROM parameter_profiles
+      WHERE theme = ?
+    `);
+    const rows = stmt.all(theme) as DbProfileRow[];
+    if (rows.length === 0) return null;
+
+    const profiles = rows.map(row => ({
+      theme: row.theme,
+      complexity: this.getBucketMidpoint(row.complexity_bucket),
+      complexityBucket: row.complexity_bucket,
+      optimalTemperature: row.optimal_temperature,
+      optimalMaxTokens: row.optimal_max_tokens,
+      enableTools: Boolean(row.enable_tools),
+      avgQuality: row.avg_quality,
+      sampleSize: row.sample_size,
+      lastUpdated: new Date(row.last_updated)
+    })) as ParameterProfile[];
+
+    const weightedProfiles = profiles
+      .map(profile => {
+        const distance = Math.abs(profile.complexityBucket - targetBucket);
+        const distanceWeight = 1 / (1 + distance);
+        const sampleWeight = Math.min(1, profile.sampleSize / 10);
+        const qualityWeight = Math.max(0.5, profile.avgQuality);
+        const weight = distanceWeight * sampleWeight * qualityWeight;
+        return { profile, weight };
+      })
+      .filter(entry => entry.weight > 0);
+
+    const totalWeight = weightedProfiles.reduce((sum, entry) => sum + entry.weight, 0);
+    if (totalWeight === 0) return null;
+
+    const temperature = weightedProfiles.reduce(
+      (sum, entry) => sum + entry.profile.optimalTemperature * entry.weight,
+      0
+    ) / totalWeight;
+
+    const maxTokens = Math.round(weightedProfiles.reduce(
+      (sum, entry) => sum + entry.profile.optimalMaxTokens * entry.weight,
+      0
+    ) / totalWeight);
+
+    const enableTools = weightedProfiles.reduce(
+      (sum, entry) => sum + (entry.profile.enableTools ? 1 : 0) * entry.weight,
+      0
+    ) / totalWeight >= 0.5;
+
+    const confidence = Math.min(0.85, 0.4 + totalWeight / 10);
+
+    return {
+      temperature,
+      maxTokens: Math.min(16000, maxTokens),
+      enableTools,
+      confidence,
+      reasoning: `Interpolated from ${weightedProfiles.length} nearby buckets for ${theme} (complexity ${complexity})`
+    };
   }
 
   /**
@@ -343,13 +488,13 @@ export class ParameterTuner {
       ORDER BY sample_size DESC
     `);
 
-    const rows = stmt.all() as any[];
+    const rows = stmt.all() as DbAnalyticsRow[];
 
     return rows.map(row => ({
       theme: row.theme,
-      avgTemperature: row.avg_temperature,
-      avgQuality: row.avg_quality,
-      sampleSize: row.sample_size
+      avgTemperature: row.avg_temperature ?? 0,
+      avgQuality: row.avg_quality ?? 0,
+      sampleSize: row.sample_size ?? 0
     }));
   }
 

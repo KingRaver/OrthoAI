@@ -1,6 +1,21 @@
 // app/lib/strategy/workflows/ensemble.ts
 import { EnsembleConfig } from '../types';
+import type { ChatCompletionMessageParam } from 'openai/resources/chat';
 import { getLlmChatUrl } from '@/app/lib/llm/config';
+import { getSharedEmbeddings } from '@/app/lib/memory/rag/embeddings';
+
+type LlmChatRequest = {
+  model: string;
+  messages: ChatCompletionMessageParam[];
+  temperature: number;
+  stream: boolean;
+  max_tokens?: number;
+};
+
+type LlmChatResponse = {
+  choices: Array<{ message?: { content?: string | null } | null }>;
+  usage?: { total_tokens?: number | null } | null;
+};
 
 /**
  * Ensemble Workflow
@@ -11,7 +26,7 @@ import { getLlmChatUrl } from '@/app/lib/llm/config';
 export class EnsembleWorkflow {
   static async executeEnsemble(
     config: EnsembleConfig,
-    messages: any[],
+    messages: ChatCompletionMessageParam[],
     _question: string,
     options: { maxTokens?: number } = {},
   ): Promise<EnsembleResult> {
@@ -28,7 +43,7 @@ export class EnsembleWorkflow {
       throw new Error('All ensemble models failed');
     }
 
-    const votingResult = this.calculateConsensus(successfulResults, config);
+    const votingResult = await this.calculateConsensus(successfulResults, config);
     const executionTime = Date.now() - startTime;
 
     const consensusThreshold = config.minConsensusThreshold || 0.7;
@@ -51,18 +66,38 @@ export class EnsembleWorkflow {
 
   private static async runModelResponse(
     model: string,
-    messages: any[],
+    messages: ChatCompletionMessageParam[],
     maxTokens?: number
   ): Promise<ModelResponse> {
-    const body: any = {
+    // Enhance messages: add instruction to system, request comprehensive output from user
+    const enhancedMessages = messages.map((msg, idx) => {
+      // Add anti-echo instruction to system message
+      if (msg.role === 'system' && typeof msg.content === 'string') {
+        return {
+          ...msg,
+          content: msg.content + '\n\nIMPORTANT: Do NOT repeat or echo these instructions. Respond directly to the user query with clinical content only.'
+        };
+      }
+      // Request comprehensive output in user message
+      if (idx === messages.length - 1 && msg.role === 'user' && typeof msg.content === 'string') {
+        return {
+          ...msg,
+          content: msg.content + '\n\nProvide a comprehensive, detailed clinical response. Do not truncate or abbreviate.'
+        };
+      }
+      return msg;
+    });
+
+    // Ensure minimum 4000 tokens to avoid truncation
+    const effectiveMaxTokens = Math.max(4000, maxTokens || 8000);
+
+    const body: LlmChatRequest = {
       model,
-      messages,
+      messages: enhancedMessages,
       temperature: 0.3,
       stream: false,
+      max_tokens: effectiveMaxTokens,
     };
-    if (typeof maxTokens === 'number') {
-      body.max_tokens = maxTokens;
-    }
 
     // Undici is configured globally in instrumentation.ts with no timeouts
     const fetchResponse = await fetch(getLlmChatUrl(), {
@@ -79,28 +114,42 @@ export class EnsembleWorkflow {
       throw new Error(`LLM server error: ${fetchResponse.status} - ${error}`);
     }
 
-    const response = await fetchResponse.json();
+    const response = (await fetchResponse.json()) as LlmChatResponse;
 
     return {
       model,
-      tokensUsed: response.usage?.total_tokens || 0,
-      response: response.choices[0].message.content?.trim() || ''
+      tokensUsed: response.usage?.total_tokens ?? 0,
+      response: response.choices?.[0]?.message?.content?.trim() || ''
     };
   }
 
-  private static calculateConsensus(
+  private static async calculateConsensus(
     votes: ModelResponse[],
     config: EnsembleConfig
-  ): ConsensusResult {
+  ): Promise<ConsensusResult> {
     const weights = config.weights || {};
 
-    // Precompute similarities
     const similarities: number[][] = votes.map(() => votes.map(() => 0));
-    for (let i = 0; i < votes.length; i++) {
-      for (let j = i + 1; j < votes.length; j++) {
-        const sim = this.jaccardSimilarity(votes[i].response, votes[j].response);
-        similarities[i][j] = sim;
-        similarities[j][i] = sim;
+    try {
+      const embeddings = getSharedEmbeddings();
+      const vectors = await Promise.all(votes.map(vote => embeddings.embed(vote.response)));
+
+      for (let i = 0; i < votes.length; i++) {
+        for (let j = i + 1; j < votes.length; j++) {
+          const sim = this.cosineSimilarity(vectors[i], vectors[j]);
+          similarities[i][j] = sim;
+          similarities[j][i] = sim;
+        }
+      }
+    } catch (error) {
+      void error;
+      // Fallback to lexical similarity if embeddings are unavailable
+      for (let i = 0; i < votes.length; i++) {
+        for (let j = i + 1; j < votes.length; j++) {
+          const sim = this.jaccardSimilarity(votes[i].response, votes[j].response);
+          similarities[i][j] = sim;
+          similarities[j][i] = sim;
+        }
       }
     }
 
@@ -158,6 +207,15 @@ export class EnsembleWorkflow {
     const intersection = new Set([...aSet].filter(x => bSet.has(x)));
     const unionSize = new Set([...aSet, ...bSet]).size;
     return unionSize === 0 ? 0 : intersection.size / unionSize;
+  }
+
+  private static cosineSimilarity(a: number[], b: number[]): number {
+    if (a.length !== b.length || a.length === 0) return 0;
+    let dot = 0;
+    for (let i = 0; i < a.length; i++) {
+      dot += a[i] * b[i];
+    }
+    return Math.max(0, Math.min(1, dot));
   }
 }
 

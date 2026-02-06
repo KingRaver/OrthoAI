@@ -68,8 +68,9 @@ export async function POST(req: NextRequest) {
           userFeedback: feedback
         });
         console.log(`[Feedback] Strategy outcome logged for decision ${decisionId}`);
-      } catch (error: any) {
-        console.warn(`[Feedback] Could not log strategy outcome for ${decisionId}:`, error.message);
+      } catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.warn(`[Feedback] Could not log strategy outcome for ${decisionId}:`, errorMessage);
         // Continue - mode tracking should still work
       }
     } else {
@@ -142,10 +143,11 @@ export async function POST(req: NextRequest) {
       }
     });
 
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('[Feedback API] Error:', error);
+    const message = error instanceof Error ? error.message : 'Failed to record feedback';
     return NextResponse.json(
-      { error: error.message || 'Failed to record feedback' },
+      { error: message },
       { status: 500 }
     );
   }

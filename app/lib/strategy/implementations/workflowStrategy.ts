@@ -4,6 +4,8 @@ import { StrategyAnalytics } from '../analytics/tracker';
 import { patternRecognizer } from '@/app/lib/learning/patternRecognition';
 import { parameterTuner } from '@/app/lib/learning/parameterTuner';
 import { StrategyDecision, StrategyContext } from '../types';
+import type { ThemeDetectionResult } from '@/app/lib/learning/patternRecognition';
+import type { TuningRecommendation } from '@/app/lib/learning/parameterTuner';
 
 /**
  * Workflow Strategy (Multi-Model Orchestration)
@@ -21,8 +23,24 @@ export class WorkflowStrategy extends BaseStrategy {
     const complexity = context.complexityScore || 50;
     const mode = context.detectedMode || 'clinical-consult';
 
+    // Allow bypassing complex workflow for debugging
+    const forceSimple = process.env.FORCE_SIMPLE_WORKFLOW === 'true';
+    if (forceSimple) {
+      console.log('[Workflow] FORCE_SIMPLE_WORKFLOW enabled - using single model');
+      return this.buildSimpleDecision(complexity, mode);
+    }
+
     try {
-      const themeDetection = await patternRecognizer.detectTheme(context.userMessage);
+      // Only use simple path for truly trivial queries (greetings, etc.)
+      // Clinical queries should always go through full workflow
+      if (complexity < 15) {
+        return this.buildSimpleDecision(complexity, mode);
+      }
+
+      const themeDetection = await patternRecognizer.detectTheme(
+        context.userMessage,
+        context.conversationId
+      );
       console.log(`[Workflow] Theme detected: ${themeDetection.primaryTheme} (confidence: ${themeDetection.confidence.toFixed(2)})`);
 
       const parameterRec = await parameterTuner.getRecommendation(
@@ -36,15 +54,42 @@ export class WorkflowStrategy extends BaseStrategy {
       return decision;
     } catch (error) {
       console.warn('[Workflow] ML lookup failed, falling back to combined workflow:', error);
-      return this.buildCombinedWorkflow(complexity, mode, null, null);
+      return complexity < 30
+        ? this.buildSimpleDecision(complexity, mode)
+        : this.buildCombinedWorkflow(complexity, mode, null, null);
     }
+  }
+
+  private buildSimpleDecision(
+    complexity: number,
+    mode: string
+  ): StrategyDecision {
+    console.log(`[Workflow] Building simple decision for complexity: ${complexity}`);
+    return {
+      id: this.generateId(),
+      strategyName: this.name,
+      timestamp: new Date(),
+      selectedModel: 'biomistral-7b-instruct',
+      temperature: 0.3,
+      maxTokens: 8000, // Increased from 4000 to allow comprehensive responses
+      streaming: true,
+      enableTools: false,
+      maxToolLoops: 0,
+      reasoning: `Simple request (complexity: ${complexity}) - single-model response`,
+      confidence: 0.75,
+      complexityScore: complexity,
+      metadata: {
+        workflowType: 'single',
+        mode
+      }
+    };
   }
 
   private buildCombinedWorkflow(
     complexity: number,
     mode: string,
-    themeDetection: any,
-    parameterRec: any
+    themeDetection: ThemeDetectionResult | null,
+    parameterRec: TuningRecommendation | null
   ): StrategyDecision {
     const ensembleModels = ['biomistral-7b-instruct', 'biogpt'];
     const weights: Record<string, number> = {
@@ -61,16 +106,16 @@ export class WorkflowStrategy extends BaseStrategy {
       {
         model: 'biomistral-7b-instruct',
         role: 'refine' as const,
-        maxTokens: 6000,
+        maxTokens: 8000,
         temperature: parameterRec?.temperature || 0.4,
-        systemPromptSuffix: 'Refine the ensemble draft for structure, evidence alignment, and clarity.'
+        systemPromptSuffix: 'Refine and EXPAND the ensemble draft. Ensure comprehensive coverage of indications, techniques, outcomes, complications, and rehabilitation. Do NOT truncate - provide complete clinical detail.'
       },
       {
         model: 'biomistral-7b-instruct',
         role: 'review' as const,
-        maxTokens: 7000,
+        maxTokens: 8000,
         temperature: 0.3,
-        systemPromptSuffix: 'Final review for rigor, missing confounders, and limitations.'
+        systemPromptSuffix: 'Final expert review. Ensure the response is thorough, clinically rigorous, and complete. Add any missing confounders, limitations, or practical considerations. Preserve all content - do NOT shorten.'
       }
     ];
 
@@ -91,7 +136,7 @@ export class WorkflowStrategy extends BaseStrategy {
       ensembleConfig: {
         enabled: true,
         models: ensembleModels,
-        votingStrategy: votingStrategy as any,
+        votingStrategy,
         weights,
         minConsensusThreshold
       },

@@ -3,12 +3,45 @@
 
 import { SQLiteStorage } from './storage/sqlite';
 import { RAGManager } from './rag';
+import { extractCodeIdentifiers } from './rag/rerank';
 import { Conversation, Message, AugmentedPrompt, ConversationSummary, UserProfile } from './schemas';
 import { getMemoryConfig } from './config';
 import { getDefaultModel, getLlmChatUrl } from '@/app/lib/llm/config';
 import { createHash } from 'crypto';
 
 let storageInstance: SQLiteStorage | null = null;
+
+class TaskQueue {
+  private queue: Array<() => Promise<void>> = [];
+  private active = 0;
+  private concurrency: number;
+
+  constructor(concurrency: number) {
+    this.concurrency = Math.max(1, concurrency);
+  }
+
+  enqueue(task: () => Promise<void>): void {
+    this.queue.push(task);
+    this.runNext();
+  }
+
+  getDepth(): number {
+    return this.queue.length;
+  }
+
+  private runNext(): void {
+    if (this.active >= this.concurrency) return;
+    const task = this.queue.shift();
+    if (!task) return;
+    this.active += 1;
+    task()
+      .catch(() => {})
+      .finally(() => {
+        this.active -= 1;
+        this.runNext();
+      });
+  }
+}
 
 /**
  * Get or create SQLite storage instance (singleton)
@@ -48,6 +81,8 @@ export class MemoryManager {
   private storage: SQLiteStorage;
   private rag: RAGManager;
   private initialized: boolean = false;
+  private embeddingQueue = new TaskQueue(2);
+  private summaryQueue = new TaskQueue(1);
 
   constructor() {
     this.storage = getStorage();
@@ -98,6 +133,7 @@ export class MemoryManager {
       temperature?: number;
     }
   ): Promise<Message> {
+    const codeIdentifiers = extractCodeIdentifiers(content);
     const message = this.storage.saveMessage({
       id: this.generateId('msg'),
       conversation_id: conversationId,
@@ -106,6 +142,7 @@ export class MemoryManager {
       tokens_used: metadata?.tokens_used,
       model_used: metadata?.model_used,
       temperature: metadata?.temperature,
+      code_identifiers: Array.from(codeIdentifiers),
     });
 
     // Track embedding status (pending) for this message
@@ -121,8 +158,12 @@ export class MemoryManager {
     }
 
     // Process message for RAG (async, don't await)
-    this.rag.processMessageForRAG(message).catch(error => {
-      console.warn('[MemoryManager] Error processing message for RAG:', error);
+    this.embeddingQueue.enqueue(async () => {
+      try {
+        await this.rag.processMessageForRAG(message);
+      } catch (error) {
+        console.warn('[MemoryManager] Error processing message for RAG:', error);
+      }
     });
 
     // Phase 2: Auto-generate conversation summary after N assistant messages
@@ -135,8 +176,12 @@ export class MemoryManager {
 
         if (count % freq === 0) {
           // Generate summary asynchronously (don't block message saving)
-          this.generateConversationSummary(conversationId).catch(error => {
-            console.warn('[MemoryManager] Error generating conversation summary:', error);
+          this.summaryQueue.enqueue(async () => {
+            try {
+              await this.generateConversationSummary(conversationId);
+            } catch (error) {
+              console.warn('[MemoryManager] Error generating conversation summary:', error);
+            }
           });
         }
       }
@@ -198,9 +243,12 @@ export class MemoryManager {
     console.log(`[MemoryManager] Starting summary generation for conversation ${conversationId}`);
 
     try {
-      // Fetch last 10 messages from the conversation
-      const allMessages = this.storage.getConversationMessages(conversationId);
-      const recentMessages = allMessages.slice(-10);
+      // Fetch last 10 messages from the conversation (DB-limited)
+      const recentMessagesDesc = this.storage.getConversationMessages(conversationId, {
+        limit: 10,
+        order: 'desc'
+      });
+      const recentMessages = recentMessagesDesc.reverse();
 
       console.log(`[MemoryManager] Found ${recentMessages.length} messages to summarize`);
 
@@ -353,8 +401,11 @@ Summary (2-3 sentences):`;
   /**
    * Get all messages in a conversation
    */
-  getConversationMessages(conversationId: string): Message[] {
-    return this.storage.getConversationMessages(conversationId);
+  getConversationMessages(
+    conversationId: string,
+    options?: { limit?: number; order?: 'asc' | 'desc' }
+  ): Message[] {
+    return this.storage.getConversationMessages(conversationId, options);
   }
 
   /**
@@ -395,6 +446,13 @@ Summary (2-3 sentences):`;
     return {
       sqlite: sqliteStats,
       rag: ragStats,
+    };
+  }
+
+  getQueueDepths(): { embeddings: number; summaries: number } {
+    return {
+      embeddings: this.embeddingQueue.getDepth(),
+      summaries: this.summaryQueue.getDepth()
     };
   }
 

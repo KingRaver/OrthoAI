@@ -9,6 +9,8 @@ import { logRetrievalMetrics, RetrievalMetrics } from '../metrics';
 import { getMemoryConfig } from '../config';
 import { deduplicateAndRerank } from './rerank';
 
+type SqliteStats = ReturnType<ReturnType<typeof getStorage>['getStats']>;
+
 /**
  * RAG Manager
  * Orchestrates embeddings, storage, and retrieval
@@ -33,6 +35,22 @@ export class RAGManager {
       topK,
       similarityThreshold
     );
+  }
+
+  private estimateTokens(text: string): number {
+    const trimmed = text.trim();
+    if (!trimmed) return 0;
+    const wordCount = trimmed.split(/\s+/).length;
+    const charCount = trimmed.length;
+    return Math.max(wordCount, Math.ceil(charCount / 4));
+  }
+
+  private trimToTokenBudget(text: string, tokenBudget: number): string {
+    if (tokenBudget <= 0) return '';
+    const maxChars = tokenBudget * 4;
+    if (text.length <= maxChars) return text;
+    const safeLength = Math.max(0, maxChars - 3);
+    return text.slice(0, safeLength).trimEnd() + '...';
   }
 
   /**
@@ -317,7 +335,7 @@ export class RAGManager {
     filters: {
       conversation_id?: string;
       role?: 'user' | 'assistant';
-      content_type?: 'message' | 'conversation_summary' | 'user_profile';
+      content_type?: 'message' | 'conversation_summary' | 'user_profile' | 'knowledge_chunk';
     },
     topK?: number
   ): Promise<RetrievalResult[]> {
@@ -354,21 +372,52 @@ export class RAGManager {
         includeProfile
       );
 
-      // Build context string
+      // Build context string with token budget enforcement
       let contextString = '';
       if (retrievedContext.length > 0) {
-        contextString = 'Previous relevant context from your memory:\n\n';
-        retrievedContext.forEach((result, idx) => {
-          contextString += `[Memory ${idx + 1}] (Similarity: ${(
-            result.similarity_score * 100
-          ).toFixed(0)}%)\n`;
-          contextString += `${result.message.role.toUpperCase()}: ${
-            result.message.content.substring(0, 200) +
-            (result.message.content.length > 200 ? '...' : '')
-          }\n\n`;
-        });
+        const { ragTokenBudget } = getMemoryConfig();
+        const header = 'Previous relevant context from your memory:\n\n';
+        const footer = '---\n\n';
+        let usedTokens = this.estimateTokens(header) + this.estimateTokens(footer);
+        const entries: string[] = [];
+        let memoryIndex = 1;
 
-        contextString += '---\n\n';
+        for (const result of retrievedContext) {
+          const label = `[Memory ${memoryIndex}] (Similarity: ${(
+            result.similarity_score * 100
+          ).toFixed(0)}%)`;
+          const rolePrefix = `${result.message.role.toUpperCase()}: `;
+          const snippet = result.message.content.substring(0, 200) +
+            (result.message.content.length > 200 ? '...' : '');
+          const entryPrefix = `${label}\n${rolePrefix}`;
+          const entryText = `${entryPrefix}${snippet}`;
+          const entryTokens = this.estimateTokens(entryText);
+
+          if (usedTokens + entryTokens <= ragTokenBudget) {
+            entries.push(entryText);
+            usedTokens += entryTokens;
+            memoryIndex += 1;
+            continue;
+          }
+
+          const remainingTokens = ragTokenBudget - usedTokens - this.estimateTokens(entryPrefix);
+          if (remainingTokens <= 0) {
+            break;
+          }
+
+          const trimmedSnippet = this.trimToTokenBudget(snippet, remainingTokens);
+          if (!trimmedSnippet) {
+            break;
+          }
+
+          entries.push(`${entryPrefix}${trimmedSnippet}`);
+          usedTokens += this.estimateTokens(`${entryPrefix}${trimmedSnippet}`);
+          break;
+        }
+
+        if (entries.length > 0) {
+          contextString = header + entries.join('\n\n') + footer;
+        }
       }
 
       // Create enhanced system prompt
@@ -400,7 +449,7 @@ Continue to be rigorous, evidence-focused, and concise. Reference past conversat
    */
   async getStats(): Promise<{
     chroma_stats: { count: number; name: string };
-    sqlite_stats: any;
+    sqlite_stats: SqliteStats;
     embedding_model_available: boolean;
     embedding_dimension: number | null;
   }> {
@@ -477,30 +526,66 @@ Continue to be rigorous, evidence-focused, and concise. Reference past conversat
     if (retrievedContext.length === 0) {
       return '';
     }
+    const { ragTokenBudget } = getMemoryConfig();
+    const header = '\n\n[Memory Context]\n' +
+      'You have access to relevant memories from past conversations that may help answer the current question.\n\n';
+    const footer = '\n\nUse these memories only if they are directly relevant.';
+    let usedTokens = this.estimateTokens(header) + this.estimateTokens(footer);
 
     let memoryIndex = 1;
-    const memoryContext = retrievedContext
-      .map((result, idx) => {
-        const snippet = result.message.content.substring(0, 200) +
-          (result.message.content.length > 200 ? '...' : '');
-        let label = `Memory ${memoryIndex}`;
-        if (result.content_type === 'conversation_summary') {
-          label = 'Conversation Summary';
-        } else if (result.content_type === 'user_profile') {
-          label = 'User Profile';
-        } else {
+    const entries: string[] = [];
+
+    for (const result of retrievedContext) {
+      const snippet = result.message.content.substring(0, 200) +
+        (result.message.content.length > 200 ? '...' : '');
+
+      let label = `Memory ${memoryIndex}`;
+      let incrementMemoryIndex = true;
+      if (result.content_type === 'conversation_summary') {
+        label = 'Conversation Summary';
+        incrementMemoryIndex = false;
+      } else if (result.content_type === 'user_profile') {
+        label = 'User Profile';
+        incrementMemoryIndex = false;
+      }
+
+      const entryPrefix = `[${label}] (Similarity: ${(result.similarity_score * 100).toFixed(0)}%)\n` +
+        `${result.message.role.toUpperCase()}: `;
+      const entryText = `${entryPrefix}${snippet}`;
+      const entryTokens = this.estimateTokens(entryText);
+
+      if (usedTokens + entryTokens <= ragTokenBudget) {
+        entries.push(entryText);
+        usedTokens += entryTokens;
+        if (incrementMemoryIndex) {
           memoryIndex += 1;
         }
+        continue;
+      }
 
-        return `[${label}] (Similarity: ${(result.similarity_score * 100).toFixed(0)}%)\n` +
-          `${result.message.role.toUpperCase()}: ${snippet}`;
-      })
-      .join('\n\n');
+      const remainingTokens = ragTokenBudget - usedTokens - this.estimateTokens(entryPrefix);
+      if (remainingTokens <= 0) {
+        break;
+      }
 
-    return `\n\n[Memory Context]\n` +
-      `You have access to relevant memories from past conversations that may help answer the current question.\n\n` +
-      `${memoryContext}\n\n` +
-      `Use these memories only if they are directly relevant.`;
+      const trimmedSnippet = this.trimToTokenBudget(snippet, remainingTokens);
+      if (!trimmedSnippet) {
+        break;
+      }
+
+      entries.push(`${entryPrefix}${trimmedSnippet}`);
+      usedTokens += this.estimateTokens(`${entryPrefix}${trimmedSnippet}`);
+      if (incrementMemoryIndex) {
+        memoryIndex += 1;
+      }
+      break;
+    }
+
+    if (entries.length === 0) {
+      return '';
+    }
+
+    return `${header}${entries.join('\n\n')}${footer}`;
   }
 
   /**

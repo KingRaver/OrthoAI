@@ -32,6 +32,10 @@ export const ORTHO_CLINICAL_KNOWLEDGE: DomainKnowledge = {
     'Comparative effectiveness (RCTs vs cohorts)',
     'Indications and contraindications',
     'Complication profiles and risk stratification',
+    'Structured orthopedic exam: inspection, palpation, ROM, strength, neurovascular',
+    'Special tests by region (knee, shoulder, hip, spine, ankle)',
+    'Grading systems (laxity, strength, ROM, neuro findings)',
+    'Core anatomy: bones, joints, ligaments, muscles, nerves',
   ],
   bestPractices: [
     'Distinguish symptom relief from structural healing',
@@ -39,6 +43,9 @@ export const ORTHO_CLINICAL_KNOWLEDGE: DomainKnowledge = {
     'Separate acute vs chronic pathology cohorts',
     'Report effect sizes and confidence intervals, not just p-values',
     'Control for confounders (age, activity level, comorbidities)',
+    'Document ROM in degrees with end-feel and pain arc; compare contralateral side',
+    'Grade instability and strength using standardized scales',
+    'Include neurovascular status and dermatomes/myotomes when indicated',
   ],
   commonPitfalls: [
     'Pooling heterogeneous cohorts without subgroup analysis',
@@ -54,6 +61,20 @@ FOCUS ON:
 - Evidence hierarchy and study design quality
 - Indications, risks, and comparative effectiveness
 - Heterogeneity of patient populations
+- Exam protocols with ROM, special tests, and grading
+
+EXAM PROTOCOLS (encode):
+- ROM: active + passive, degrees, end-feel, pain arc, compare contralateral
+- Strength: MRC 0-5, key muscle groups, pain-limited vs true weakness
+- Instability: varus/valgus at 0°/30°, Lachman grade, pivot shift grade
+- Special tests: McMurray, Thessaly, apprehension, Hawkins, Neer, FABER, FADIR
+- Neurovascular: dermatomes, myotomes, reflexes, pulses, cap refill
+
+ANATOMY QUICK MAP:
+- Bones/Joints: shoulder (GH/AC), elbow (ulnohumeral), hip (acetabulofemoral), knee (tibiofemoral/patellofemoral), ankle (tibiotalar/subtalar)
+- Ligaments: ACL, PCL, MCL, LCL/PLC, MPFL, ATFL, CFL, deltoid, UCL (elbow), TFCC
+- Muscles: rotator cuff, deltoid, biceps/triceps, quads, hamstrings, glute med/max, gastroc/soleus, tibialis ant/post
+- Nerves: axillary, radial, ulnar, median, femoral, sciatic, tibial, peroneal
 
 AVOID:
 - Overgeneralizing results across distinct cohorts
@@ -72,6 +93,7 @@ export const ORTHO_SURGICAL_KNOWLEDGE: DomainKnowledge = {
     'Surgical biomechanics and stability',
     'Perioperative complications',
     'Reconstruction vs repair decision-making',
+    'Surgical anatomy and at-risk structures',
   ],
   bestPractices: [
     'Compare techniques on alignment, stability, and outcomes',

@@ -5,6 +5,8 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 
+const DEBUG_METRICS = process.env.DEBUG_METRICS === 'true';
+
 /**
  * STT API - Speech-to-Text transcription using local Whisper
  *
@@ -44,6 +46,7 @@ interface WhisperJsonOutput {
 export async function POST(req: NextRequest) {
   let tempAudioPath: string | null = null;
   let tempJsonPath: string | null = null;
+  const requestStart = Date.now();
 
   try {
     const formData = await req.formData();
@@ -135,6 +138,9 @@ export async function POST(req: NextRequest) {
 
       const duration = Date.now() - startTime;
       console.log(`[STT] Transcription completed in ${duration}ms`);
+      if (DEBUG_METRICS) {
+        console.log(`[Metrics] STT duration: ${duration}ms (total ${Date.now() - requestStart}ms)`);
+      }
 
       // Verify JSON output file was created
       if (!fs.existsSync(tempJsonPath)) {
@@ -167,8 +173,9 @@ export async function POST(req: NextRequest) {
         duration
       });
 
-    } catch (execError: any) {
-      const errorMsg = execError.message || String(execError);
+    } catch (execError: unknown) {
+      const errorMsg =
+        execError instanceof Error ? execError.message : String(execError);
 
       // Handle specific error types
       if (errorMsg.includes('ETIMEDOUT')) {

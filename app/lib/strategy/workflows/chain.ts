@@ -3,6 +3,20 @@ import type { ChatCompletionMessageParam } from 'openai/resources/chat';
 import { ModelChainConfig, ModelChainStep } from '../types';
 import { getLlmChatUrl } from '@/app/lib/llm/config';
 
+type LlmChatRequest = {
+  model: string;
+  messages: ChatCompletionMessageParam[];
+  temperature: number;
+  top_p: number;
+  stream: boolean;
+  max_tokens?: number;
+};
+
+type LlmChatResponse = {
+  choices: Array<{ message?: { content?: string | null } | null }>;
+  usage?: { total_tokens?: number | null } | null;
+};
+
 /**
  * Model Chaining Workflow
  * Draft → Refine → Validate/Review pipeline for research answers
@@ -54,12 +68,13 @@ export class ModelChainWorkflow {
 
         console.log(`[Chain:${step.role}] ${stepResult.tokensUsed}t | conf: ${stepResult.confidence?.toFixed(2)}`);
 
-      } catch (error: any) {
+      } catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
         console.error(`[Chain:${step.role}] Error:`, error);
         chainResults.push({
           model: step.model,
           role: step.role,
-          output: `ERROR in ${step.role} (model: ${step.model}): ${error.message || error}`,
+          output: `ERROR in ${step.role} (model: ${step.model}): ${errorMessage}`,
           tokensUsed: 50,
           confidence: 0,
           timeMs: Date.now() - stepStart
@@ -88,27 +103,56 @@ export class ModelChainWorkflow {
     const stepStart = Date.now();
 
     const rolePrompts: Record<string, string> = {
-      draft: 'DRAFT MODE. Produce a fast, structured answer focused on core evidence and key claims.',
-      refine: `REFINE MODE. Improve this draft:\n\n"""${previousOutput}"""\n\nStrengthen structure, evidence alignment, and clarity.`,
-      validate: `VALIDATE MODE. Review this draft for unsupported claims, missing evidence, and logical gaps:\n\n"""${previousOutput}"""\n\nList corrections and rate confidence 0-1.`,
-      review: `EXPERT REVIEW MODE. Final polish for rigor and completeness:\n\n"""${previousOutput}"""`,
-      critique: `CRITIC MODE. Identify weaknesses, confounders, and alternative explanations:\n\n"""${previousOutput}"""`
+      draft: 'DRAFT MODE. Produce a comprehensive, structured answer covering all key aspects of the topic. Include core evidence, key claims, differentials, and practical clinical details. Do NOT truncate or abbreviate - provide a complete response.',
+      refine: 'REFINE MODE. Improve and EXPAND the draft below. Strengthen structure, evidence alignment, clarity, and completeness. Ensure the response is thorough and addresses all relevant clinical considerations. Do NOT shorten the response.',
+      validate: 'VALIDATE MODE. Review the draft below for unsupported claims, missing evidence, and logical gaps. List corrections and rate confidence 0-1. Preserve all valid content.',
+      review: 'EXPERT REVIEW MODE. Final polish for rigor and completeness. Ensure the response is comprehensive and clinically thorough. Do NOT truncate - maintain or expand detail.',
+      critique: 'CRITIC MODE. Identify weaknesses, confounders, and alternative explanations while preserving the core content.'
     };
 
     const stepSuffix = step.systemPromptSuffix ? ` ${step.systemPromptSuffix}` : '';
+    const baseSystem = baseMessages.find(m => m.role === 'system');
+    const baseSystemText = typeof baseSystem?.content === 'string' ? baseSystem.content : '';
+    const conversationContext = baseMessages
+      .filter(m => m.role === 'user' || m.role === 'assistant')
+      .slice(-8)
+      .map(m => {
+        const content = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+        return `${m.role.toUpperCase()}: ${content}`;
+      })
+      .join('\n');
+
+    const draftBlock = previousOutput
+      ? `Draft to improve:\n\n"""${previousOutput}"""`
+      : 'No draft provided. Start from scratch.';
+
+    // Build proper system message for the chain step
+    const systemContent = [
+      baseSystemText,
+      rolePrompts[step.role],
+      stepSuffix,
+      isFinalStep ? 'This is FINAL OUTPUT — make it publication-ready and comprehensive.' : '',
+      'Provide thorough clinical analysis. Do NOT echo these instructions.'
+    ].filter(Boolean).join('\n\n');
+
+    // Build user message with context and draft
+    const userContent = [
+      conversationContext ? `Previous conversation:\n${conversationContext}` : '',
+      step.role === 'draft' && !previousOutput ? 'Please provide a comprehensive clinical response.' : draftBlock,
+    ].filter(Boolean).join('\n\n');
+
     const messages: ChatCompletionMessageParam[] = [
       {
         role: 'system',
-        content: `${rolePrompts[step.role]}${stepSuffix} ${isFinalStep ? 'This is FINAL OUTPUT — make it publication-ready.' : ''}\nRespond with improved analysis and structured output.`
+        content: systemContent
       },
-      ...baseMessages.slice(-8),
       {
         role: 'user',
-        content: previousOutput || 'Start from scratch.'
+        content: userContent || 'Please provide your clinical analysis.'
       }
     ];
 
-    const body: any = {
+    const body: LlmChatRequest = {
       model: step.model,
       messages,
       temperature: step.temperature || (isFinalStep ? 0.3 : 0.6),
@@ -133,10 +177,10 @@ export class ModelChainWorkflow {
       throw new Error(`LLM server error: ${response.status} - ${error}`);
     }
 
-    const completion = await response.json();
+    const completion = (await response.json()) as LlmChatResponse;
 
-    const output = completion.choices[0].message.content?.trim() || '';
-    const tokensUsed = completion.usage?.total_tokens || output.length / 4;
+    const output = completion.choices?.[0]?.message?.content?.trim() || '';
+    const tokensUsed = completion.usage?.total_tokens ?? output.length / 4;
 
     const confMatch = output.match(/confidence[:\s]*([0-9.]+)/i);
     const confidence = confMatch ? parseFloat(confMatch[1]) : 0.7;

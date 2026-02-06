@@ -32,6 +32,34 @@ export interface HistoricalOutcome {
   timestamp: Date;
 }
 
+type DbQualityFeatureRow = {
+  avg_quality: number | null;
+  sample_count: number | null;
+  success_rate: number | null;
+};
+
+type DbThemeModelStatsRow = {
+  avg_quality: number | null;
+  count: number | null;
+};
+
+type DbComplexityStatsRow = {
+  avg_quality: number | null;
+};
+
+type DbAggregateRow = {
+  avg_quality: number | null;
+  sample_count: number | null;
+  success_rate: number | null;
+};
+
+type DbQualityAnalyticsRow = {
+  model: string;
+  avg_quality: number | null;
+  sample_count: number | null;
+  success_rate: number | null;
+};
+
 export class QualityPredictor {
   private db!: sqlite3.Database;
 
@@ -100,11 +128,18 @@ export class QualityPredictor {
     const features = await this.getFeatures(theme, complexityBucket, model);
 
     // Calculate prediction factors
-    const factors = {
+    const modelHistory = features?.avg_quality ?? 0.75;
+    const factors: QualityPrediction['factors'] = {
       themeMatch: await this.calculateThemeMatchScore(theme, model),
       complexityAlignment: await this.calculateComplexityScore(complexity, model),
-      modelHistory: features ? features.avg_quality : 0.75,
-      parameterOptimality: this.calculateParameterScore(temperature, complexity, theme)
+      modelHistory,
+      parameterOptimality: this.calculateParameterScore(
+        temperature,
+        complexity,
+        theme,
+        maxTokens,
+        toolsEnabled
+      )
     };
 
     // Weighted prediction
@@ -143,14 +178,14 @@ export class QualityPredictor {
     theme: string,
     complexityBucket: number,
     model: string
-  ): Promise<{ avg_quality: number; sample_count: number; success_rate: number } | null> {
+  ): Promise<DbQualityFeatureRow | null> {
     const stmt = this.db.prepare(`
       SELECT avg_quality, sample_count, success_rate
       FROM quality_features
       WHERE theme = ? AND complexity_bucket = ? AND model = ?
     `);
 
-    const row = stmt.get(theme, complexityBucket, model) as any;
+    const row = stmt.get(theme, complexityBucket, model) as DbQualityFeatureRow | undefined;
     return row || null;
   }
 
@@ -165,10 +200,10 @@ export class QualityPredictor {
       AND created_at >= datetime('now', '-30 days')
     `);
 
-    const row = stmt.get(theme, model) as any;
+    const row = stmt.get(theme, model) as DbThemeModelStatsRow | undefined;
 
-    if (row && row.count >= 3) {
-      return row.avg_quality;
+    if (row && (row.count ?? 0) >= 3) {
+      return row.avg_quality ?? 0.75;
     }
 
     // Default scores based on known model strengths
@@ -211,9 +246,9 @@ export class QualityPredictor {
       AND created_at >= datetime('now', '-30 days')
     `);
 
-    const row = stmt.get(model, complexity - 15, complexity + 15) as any;
+    const row = stmt.get(model, complexity - 15, complexity + 15) as DbComplexityStatsRow | undefined;
 
-    if (row && row.avg_quality) {
+    if (row && row.avg_quality !== null) {
       return row.avg_quality;
     }
 
@@ -230,7 +265,13 @@ export class QualityPredictor {
   /**
    * Calculate parameter optimality score
    */
-  private calculateParameterScore(temperature: number, complexity: number, theme: string): number {
+  private calculateParameterScore(
+    temperature: number,
+    complexity: number,
+    theme: string,
+    maxTokens: number,
+    toolsEnabled: boolean
+  ): number {
     // Ideal temperature ranges
     const creativeTasks: string[] = [];
     const preciseTasks = [
@@ -254,16 +295,31 @@ export class QualityPredictor {
     const tempDiff = Math.abs(temperature - idealTemp);
     const tempScore = Math.max(0.5, 1.0 - (tempDiff / 0.5));
 
-    return tempScore;
+    // Token budget scoring (higher complexity needs more tokens)
+    const idealTokens = Math.min(16000, Math.max(2000, 4000 + (complexity * 120)));
+    const tokenDiffRatio = Math.min(1, Math.abs(maxTokens - idealTokens) / idealTokens);
+    const tokenScore = Math.max(0.5, 1.0 - tokenDiffRatio);
+
+    // Tools usage scoring (tools help for complex or high-risk themes)
+    const toolPreferredThemes = [
+      'surgical-planning',
+      'complications-risk',
+      'imaging-dx',
+      'evidence-brief'
+    ];
+    const toolsRecommended = complexity >= 50 || toolPreferredThemes.includes(theme);
+    const toolsScore = toolsEnabled === toolsRecommended ? 1.0 : 0.7;
+
+    return (tempScore * 0.5) + (tokenScore * 0.3) + (toolsScore * 0.2);
   }
 
   /**
    * Generate human-readable reasoning
    */
   private generateReasoning(
-    factors: any,
+    factors: QualityPrediction['factors'],
     sampleCount: number,
-    features: any
+    features: DbQualityFeatureRow | null
   ): string {
     const parts: string[] = [];
 
@@ -285,7 +341,7 @@ export class QualityPredictor {
       parts.push('well-suited for complexity');
     }
 
-    if (features && features.success_rate > 0.85) {
+    if (features?.success_rate !== null && features?.success_rate !== undefined && features.success_rate > 0.85) {
       parts.push(`${(features.success_rate * 100).toFixed(0)}% success rate`);
     }
 
@@ -353,9 +409,9 @@ export class QualityPredictor {
       AND created_at >= datetime('now', '-90 days')
     `);
 
-    const row = stmt.get(theme, bucketMin, bucketMax, model) as any;
+    const row = stmt.get(theme, bucketMin, bucketMax, model) as DbAggregateRow | undefined;
 
-    if (row && row.sample_count > 0) {
+    if (row && (row.sample_count ?? 0) > 0) {
       const upsertStmt = this.db.prepare(`
         INSERT INTO quality_features
         (id, theme, complexity_bucket, model, avg_quality, sample_count, success_rate, last_updated)
@@ -369,14 +425,17 @@ export class QualityPredictor {
 
       const id = `feature_${theme}_${complexityBucket}_${model}`;
       const now = new Date().toISOString();
+      const avgQuality = row.avg_quality ?? 0;
+      const sampleCount = row.sample_count ?? 0;
+      const successRate = row.success_rate ?? 0;
 
       upsertStmt.run(
         id, theme, complexityBucket, model,
-        row.avg_quality, row.sample_count, row.success_rate, now,
-        row.avg_quality, row.sample_count, row.success_rate, now
+        avgQuality, sampleCount, successRate, now,
+        avgQuality, sampleCount, successRate, now
       );
 
-      console.log(`[QualityPredictor] Updated features for ${theme}/${complexityBucket}/${model}: quality=${row.avg_quality.toFixed(2)}, samples=${row.sample_count}`);
+      console.log(`[QualityPredictor] Updated features for ${theme}/${complexityBucket}/${model}: quality=${avgQuality.toFixed(2)}, samples=${sampleCount}`);
     }
   }
 
@@ -401,13 +460,13 @@ export class QualityPredictor {
       ORDER BY avg_quality DESC
     `);
 
-    const rows = stmt.all() as any[];
+    const rows = stmt.all() as DbQualityAnalyticsRow[];
 
     return rows.map(row => ({
       model: row.model,
-      avgQuality: row.avg_quality,
-      sampleCount: row.sample_count,
-      successRate: row.success_rate
+      avgQuality: row.avg_quality ?? 0,
+      sampleCount: row.sample_count ?? 0,
+      successRate: row.success_rate ?? 0
     }));
   }
 

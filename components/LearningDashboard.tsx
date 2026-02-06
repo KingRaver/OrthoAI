@@ -64,7 +64,8 @@ export default function LearningDashboard() {
   const [data, setData] = useState<AnalyticsData>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'themes' | 'parameters' | 'quality' | 'strategies' | 'modes'>('themes');
+  type TabId = 'themes' | 'parameters' | 'quality' | 'strategies' | 'modes';
+  const [activeTab, setActiveTab] = useState<TabId>('themes');
 
   useEffect(() => {
     fetchAnalytics();
@@ -108,23 +109,23 @@ export default function LearningDashboard() {
   return (
     <div className="bg-white rounded-2xl shadow-xl border-2 border-slate-200 overflow-hidden">
       {/* Header */}
-      <div className="bg-gradient-to-r from-teal to-cyan-light p-6">
+      <div className="bg-linear-to-r from-teal to-cyan-light p-6">
         <h2 className="text-2xl font-bold text-white">Continuous Learning Dashboard</h2>
         <p className="text-cyan-50 text-sm mt-1">Real-time adaptation metrics and performance insights</p>
       </div>
 
       {/* Tabs */}
       <div className="flex border-b border-slate-200 bg-slate-50">
-        {[
+        {([
           { id: 'themes', label: 'Theme Patterns', count: data.themes?.length || 0 },
           { id: 'parameters', label: 'Parameter Tuning', count: data.parameters?.length || 0 },
           { id: 'quality', label: 'Quality Prediction', count: data.quality?.length || 0 },
           { id: 'strategies', label: 'Strategy Performance', count: data.strategies?.length || 0 },
           { id: 'modes', label: 'Mode Performance', count: data.modes?.length || 0 }
-        ].map(tab => (
+        ] as Array<{ id: TabId; label: string; count: number }>).map(tab => (
           <button
             key={tab.id}
-            onClick={() => setActiveTab(tab.id as any)}
+            onClick={() => setActiveTab(tab.id)}
             className={`flex-1 px-6 py-4 text-sm font-medium transition-all ${
               activeTab === tab.id
                 ? 'text-teal border-b-2 border-teal bg-white'
@@ -233,7 +234,7 @@ export default function LearningDashboard() {
                     {/* Quality bar */}
                     <div className="mt-3 h-2 bg-slate-200 rounded-full overflow-hidden">
                       <div
-                        className="h-full bg-gradient-to-r from-teal to-cyan-light"
+                        className="h-full bg-linear-to-r from-teal to-cyan-light"
                         style={{ width: `${qual.avgQuality * 100}%` }}
                       />
                     </div>

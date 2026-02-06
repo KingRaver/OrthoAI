@@ -14,6 +14,115 @@ import {
   UserProfile,
 } from '../schemas';
 
+type PreferenceValue = string | number | boolean | null | object;
+
+type ConversationRow = {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  model_used: string | null;
+  total_tokens: number;
+  summary: string | null;
+  tags: string | null;
+};
+
+type MessageRow = {
+  id: string;
+  conversation_id: string;
+  role: Message['role'];
+  content: string;
+  created_at: string;
+  tokens_used: number | null;
+  tool_calls: string | null;
+  tool_results: string | null;
+  model_used: string | null;
+  temperature: number | null;
+  code_identifiers: string | null;
+};
+
+type UserPreferenceRow = {
+  key: string;
+  value: string;
+  data_type: UserPreference['data_type'];
+  created_at: string;
+  updated_at: string;
+};
+
+type ConversationSummaryRow = {
+  conversation_id: string;
+  summary: string;
+  updated_at: string;
+  content_hash: string | null;
+  embedding_status: ConversationSummary['embedding_status'];
+  error_message: string | null;
+};
+
+type UserProfileRow = {
+  id: string;
+  profile: string;
+  updated_at: string;
+  content_hash: string | null;
+  embedding_status: UserProfile['embedding_status'];
+  error_message: string | null;
+};
+
+type EmbeddingMetadataRow = {
+  id: string;
+  message_id: string;
+  conversation_id: string;
+  chroma_id: string | null;
+  created_at: string;
+  embedding_status: EmbeddingMetadata['embedding_status'];
+  error_message: string | null;
+};
+
+type SessionRow = {
+  id: string;
+  user_id: string;
+  created_at: string;
+  last_activity: string;
+  context_tokens_used: number;
+};
+
+type CountRow = { count: number };
+type SumRow = { total: number | null };
+type CreatedAtRow = { created_at: string };
+
+type StrategyPerformanceRow = {
+  total_decisions: number;
+  avg_response_time: number | null;
+  avg_tokens_used: number | null;
+  success_rate: number | null;
+  avg_quality: number | null;
+};
+
+type ModelPerformanceRow = {
+  total_usage: number;
+  avg_response_time: number | null;
+  avg_tokens_used: number | null;
+  success_rate: number | null;
+  avg_quality: number | null;
+};
+
+type StrategyDecisionRow = {
+  id: string;
+  conversation_id: string;
+  message_id: string | null;
+  strategy_name: string;
+  selected_model: string;
+  reasoning: string;
+  confidence: number;
+  context_complexity: string;
+  complexity_score: number;
+  decision_time_ms: number;
+  created_at: string;
+  response_time_ms: number | null;
+  tokens_used: number | null;
+  error_occurred: number | null;
+  response_quality: number | null;
+};
+
 /**
  * SQLite Storage Implementation
  * Handles all database operations with prepared statements
@@ -44,6 +153,16 @@ export class SQLiteStorage {
 
     const migrationsDir = path.join(process.cwd(), 'app/lib/memory/migrations');
 
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        name TEXT PRIMARY KEY,
+        applied_at TEXT NOT NULL
+      );
+    `);
+
+    const appliedRows = this.db.prepare(`SELECT name FROM schema_migrations`).all() as Array<{ name: string }>;
+    const appliedMigrations = new Set(appliedRows.map(row => row.name));
+
     // Get all migration files in order
     const migrationFiles = fs.readdirSync(migrationsDir)
       .filter(file => file.endsWith('.sql'))
@@ -53,10 +172,11 @@ export class SQLiteStorage {
         return a.localeCompare(b);
       }); // Ensure init.sql runs first
 
-    console.log(`[SQLite] Running ${migrationFiles.length} migrations...`);
+    const pendingMigrations = migrationFiles.filter(file => !appliedMigrations.has(file));
+    console.log(`[SQLite] Running ${pendingMigrations.length} migrations...`);
 
     // Run each migration file
-    for (const migrationFile of migrationFiles) {
+    for (const migrationFile of pendingMigrations) {
       const migrationPath = path.join(migrationsDir, migrationFile);
       const migrationSQL = fs.readFileSync(migrationPath, 'utf-8');
 
@@ -64,6 +184,10 @@ export class SQLiteStorage {
         // Execute the full migration file at once.
         // This supports multi-statement constructs like triggers.
         this.db.exec(migrationSQL);
+        this.db.prepare(`
+          INSERT INTO schema_migrations (name, applied_at)
+          VALUES (?, ?)
+        `).run(migrationFile, new Date().toISOString());
       } catch (error) {
         console.error(`[SQLite] Error in ${migrationFile}:`, error);
         throw error;
@@ -115,7 +239,7 @@ export class SQLiteStorage {
       SELECT * FROM conversations WHERE id = ?
     `);
 
-    const row = stmt.get(conversationId) as any;
+    const row = stmt.get(conversationId) as ConversationRow | undefined;
     if (!row) return null;
 
     return {
@@ -123,9 +247,9 @@ export class SQLiteStorage {
       title: row.title,
       created_at: row.created_at,
       updated_at: row.updated_at,
-      model_used: row.model_used,
+      model_used: row.model_used ?? undefined,
       total_tokens: row.total_tokens,
-      summary: row.summary,
+      summary: row.summary ?? undefined,
       tags: row.tags ? JSON.parse(row.tags) : [],
     };
   }
@@ -140,15 +264,15 @@ export class SQLiteStorage {
       LIMIT ? OFFSET ?
     `);
 
-    const rows = stmt.all(limit, offset) as any[];
+    const rows = stmt.all(limit, offset) as ConversationRow[];
     return rows.map(row => ({
       id: row.id,
       title: row.title,
       created_at: row.created_at,
       updated_at: row.updated_at,
-      model_used: row.model_used,
+      model_used: row.model_used ?? undefined,
       total_tokens: row.total_tokens,
-      summary: row.summary,
+      summary: row.summary ?? undefined,
       tags: row.tags ? JSON.parse(row.tags) : [],
     }));
   }
@@ -162,8 +286,8 @@ export class SQLiteStorage {
 
     const stmt = this.db.prepare(`
       INSERT INTO messages 
-      (id, conversation_id, role, content, created_at, tokens_used, tool_calls, tool_results, model_used, temperature)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (id, conversation_id, role, content, created_at, tokens_used, tool_calls, tool_results, model_used, temperature, code_identifiers)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     stmt.run(
@@ -176,7 +300,8 @@ export class SQLiteStorage {
       message.tool_calls ? JSON.stringify(message.tool_calls) : null,
       message.tool_results ? JSON.stringify(message.tool_results) : null,
       message.model_used || null,
-      message.temperature || null
+      message.temperature || null,
+      message.code_identifiers ? JSON.stringify(message.code_identifiers) : null
     );
 
     return {
@@ -194,7 +319,7 @@ export class SQLiteStorage {
       SELECT * FROM messages WHERE id = ?
     `);
 
-    const row = stmt.get(messageId) as any;
+    const row = stmt.get(messageId) as MessageRow | undefined;
     if (!row) return null;
 
     return {
@@ -203,36 +328,71 @@ export class SQLiteStorage {
       role: row.role,
       content: row.content,
       created_at: row.created_at,
-      tokens_used: row.tokens_used,
+      tokens_used: row.tokens_used ?? undefined,
       tool_calls: row.tool_calls ? JSON.parse(row.tool_calls) : undefined,
       tool_results: row.tool_results ? JSON.parse(row.tool_results) : undefined,
-      model_used: row.model_used,
-      temperature: row.temperature,
+      model_used: row.model_used ?? undefined,
+      temperature: row.temperature ?? undefined,
+      code_identifiers: row.code_identifiers ? JSON.parse(row.code_identifiers) : undefined,
     };
   }
 
   /**
    * READ: Get all messages in a conversation
    */
-  getConversationMessages(conversationId: string): Message[] {
+  getConversationMessages(
+    conversationId: string,
+    options?: { limit?: number; order?: 'asc' | 'desc' }
+  ): Message[] {
+    const order = options?.order?.toUpperCase() === 'DESC' ? 'DESC' : 'ASC';
+    const limitClause = options?.limit ? ` LIMIT ${options.limit}` : '';
     const stmt = this.db.prepare(`
       SELECT * FROM messages 
       WHERE conversation_id = ? 
-      ORDER BY created_at ASC
+      ORDER BY created_at ${order}
+      ${limitClause}
     `);
 
-    const rows = stmt.all(conversationId) as any[];
+    const rows = stmt.all(conversationId) as MessageRow[];
     return rows.map(row => ({
       id: row.id,
       conversation_id: row.conversation_id,
       role: row.role,
       content: row.content,
       created_at: row.created_at,
-      tokens_used: row.tokens_used,
+      tokens_used: row.tokens_used ?? undefined,
       tool_calls: row.tool_calls ? JSON.parse(row.tool_calls) : undefined,
       tool_results: row.tool_results ? JSON.parse(row.tool_results) : undefined,
-      model_used: row.model_used,
-      temperature: row.temperature,
+      model_used: row.model_used ?? undefined,
+      temperature: row.temperature ?? undefined,
+      code_identifiers: row.code_identifiers ? JSON.parse(row.code_identifiers) : undefined,
+    }));
+  }
+
+  /**
+   * READ: Get messages by IDs in a single query
+   */
+  getMessagesByIds(messageIds: string[]): Message[] {
+    if (messageIds.length === 0) return [];
+
+    const placeholders = messageIds.map(() => '?').join(', ');
+    const stmt = this.db.prepare(`
+      SELECT * FROM messages WHERE id IN (${placeholders})
+    `);
+
+    const rows = stmt.all(...messageIds) as MessageRow[];
+    return rows.map(row => ({
+      id: row.id,
+      conversation_id: row.conversation_id,
+      role: row.role,
+      content: row.content,
+      created_at: row.created_at,
+      tokens_used: row.tokens_used ?? undefined,
+      tool_calls: row.tool_calls ? JSON.parse(row.tool_calls) : undefined,
+      tool_results: row.tool_results ? JSON.parse(row.tool_results) : undefined,
+      model_used: row.model_used ?? undefined,
+      temperature: row.temperature ?? undefined,
+      code_identifiers: row.code_identifiers ? JSON.parse(row.code_identifiers) : undefined,
     }));
   }
 
@@ -246,7 +406,7 @@ export class SQLiteStorage {
     toDate?: Date
   ): Message[] {
     let query = `SELECT * FROM messages WHERE conversation_id = ?`;
-    const params: any[] = [conversationId];
+    const params: string[] = [conversationId];
 
     if (role) {
       query += ` AND role = ?`;
@@ -266,7 +426,7 @@ export class SQLiteStorage {
     query += ` ORDER BY created_at ASC`;
 
     const stmt = this.db.prepare(query);
-    const rows = stmt.all(...params) as any[];
+    const rows = stmt.all(...params) as MessageRow[];
 
     return rows.map(row => ({
       id: row.id,
@@ -274,11 +434,11 @@ export class SQLiteStorage {
       role: row.role,
       content: row.content,
       created_at: row.created_at,
-      tokens_used: row.tokens_used,
+      tokens_used: row.tokens_used ?? undefined,
       tool_calls: row.tool_calls ? JSON.parse(row.tool_calls) : undefined,
       tool_results: row.tool_results ? JSON.parse(row.tool_results) : undefined,
-      model_used: row.model_used,
-      temperature: row.temperature,
+      model_used: row.model_used ?? undefined,
+      temperature: row.temperature ?? undefined,
     }));
   }
 
@@ -287,7 +447,7 @@ export class SQLiteStorage {
    */
   getConversationMessageCount(conversationId: string, role?: 'user' | 'assistant'): number {
     let query = `SELECT COUNT(*) as count FROM messages WHERE conversation_id = ?`;
-    const params: any[] = [conversationId];
+    const params: string[] = [conversationId];
 
     if (role) {
       query += ` AND role = ?`;
@@ -295,8 +455,8 @@ export class SQLiteStorage {
     }
 
     const stmt = this.db.prepare(query);
-    const row = stmt.get(...params) as any;
-    return row?.count || 0;
+    const row = stmt.get(...params) as CountRow | undefined;
+    return row?.count ?? 0;
   }
 
   /**
@@ -304,20 +464,37 @@ export class SQLiteStorage {
    */
   updateConversation(conversationId: string, updates: Partial<Conversation>): void {
     const now = new Date().toISOString();
-    const allowedFields = ['title', 'model_used', 'total_tokens', 'summary', 'tags'];
     const setClauses: string[] = ['updated_at = ?'];
-    const values: any[] = [now];
+    const values: Array<string | number | null> = [now];
 
-    Object.entries(updates).forEach(([key, value]) => {
-      if (allowedFields.includes(key)) {
-        setClauses.push(`${key} = ?`);
-        if (key === 'tags' && Array.isArray(value)) {
-          values.push(JSON.stringify(value));
-        } else {
-          values.push(value);
-        }
+    if ('title' in updates) {
+      setClauses.push('title = ?');
+      values.push(updates.title ?? null);
+    }
+
+    if ('model_used' in updates) {
+      setClauses.push('model_used = ?');
+      values.push(updates.model_used ?? null);
+    }
+
+    if ('total_tokens' in updates) {
+      setClauses.push('total_tokens = ?');
+      values.push(updates.total_tokens ?? null);
+    }
+
+    if ('summary' in updates) {
+      setClauses.push('summary = ?');
+      values.push(updates.summary ?? null);
+    }
+
+    if ('tags' in updates) {
+      setClauses.push('tags = ?');
+      if (Array.isArray(updates.tags)) {
+        values.push(JSON.stringify(updates.tags));
+      } else {
+        values.push(null);
       }
-    });
+    }
 
     values.push(conversationId);
 
@@ -372,7 +549,7 @@ export class SQLiteStorage {
    */
   getPreference(key: string): UserPreference | null {
     const stmt = this.db.prepare(`SELECT * FROM user_preferences WHERE key = ?`);
-    const row = stmt.get(key) as any;
+    const row = stmt.get(key) as UserPreferenceRow | undefined;
 
     if (!row) return null;
 
@@ -388,11 +565,11 @@ export class SQLiteStorage {
   /**
    * PREFERENCES: Get all user preferences
    */
-  getAllPreferences(): Record<string, any> {
+  getAllPreferences(): Record<string, PreferenceValue> {
     const stmt = this.db.prepare(`SELECT * FROM user_preferences`);
-    const rows = stmt.all() as any[];
+    const rows = stmt.all() as UserPreferenceRow[];
 
-    const result: Record<string, any> = {};
+    const result: Record<string, PreferenceValue> = {};
     rows.forEach(row => {
       if (row.data_type === 'json') {
         result[row.key] = JSON.parse(row.value);
@@ -455,16 +632,16 @@ export class SQLiteStorage {
     const stmt = this.db.prepare(`
       SELECT * FROM conversation_summaries WHERE conversation_id = ?
     `);
-    const row = stmt.get(conversationId) as any;
+    const row = stmt.get(conversationId) as ConversationSummaryRow | undefined;
     if (!row) return null;
 
     return {
       conversation_id: row.conversation_id,
       summary: row.summary,
       updated_at: row.updated_at,
-      content_hash: row.content_hash,
+      content_hash: row.content_hash ?? undefined,
       embedding_status: row.embedding_status,
-      error_message: row.error_message || undefined,
+      error_message: row.error_message ?? undefined,
     };
   }
 
@@ -518,16 +695,16 @@ export class SQLiteStorage {
    */
   getUserProfile(): UserProfile | null {
     const stmt = this.db.prepare(`SELECT * FROM user_profile WHERE id = 'default'`);
-    const row = stmt.get() as any;
+    const row = stmt.get() as UserProfileRow | undefined;
     if (!row) return null;
 
     return {
       id: row.id,
       profile: row.profile,
       updated_at: row.updated_at,
-      content_hash: row.content_hash,
+      content_hash: row.content_hash ?? undefined,
       embedding_status: row.embedding_status,
-      error_message: row.error_message || undefined,
+      error_message: row.error_message ?? undefined,
     };
   }
 
@@ -594,15 +771,15 @@ export class SQLiteStorage {
       LIMIT ?
     `);
 
-    const rows = stmt.all(limit) as any[];
+    const rows = stmt.all(limit) as EmbeddingMetadataRow[];
     return rows.map(row => ({
       id: row.id,
       message_id: row.message_id,
       conversation_id: row.conversation_id,
-      chroma_id: row.chroma_id,
+      chroma_id: row.chroma_id ?? undefined,
       created_at: row.created_at,
       embedding_status: row.embedding_status,
-      error_message: row.error_message,
+      error_message: row.error_message ?? undefined,
     }));
   }
 
@@ -660,7 +837,7 @@ export class SQLiteStorage {
    */
   getSession(sessionId: string): Session | null {
     const stmt = this.db.prepare(`SELECT * FROM sessions WHERE id = ?`);
-    const row = stmt.get(sessionId) as any;
+    const row = stmt.get(sessionId) as SessionRow | undefined;
 
     if (!row) return null;
 
@@ -742,27 +919,34 @@ export class SQLiteStorage {
     newest_message: string | null;
   } {
     const conversationCount = (
-      this.db.prepare('SELECT COUNT(*) as count FROM conversations').get() as any
+      this.db.prepare('SELECT COUNT(*) as count FROM conversations').get() as CountRow
     ).count;
 
-    const messageCount = (this.db.prepare('SELECT COUNT(*) as count FROM messages').get() as any)
-      .count;
+    const messageCount = (
+      this.db.prepare('SELECT COUNT(*) as count FROM messages').get() as CountRow
+    ).count;
 
     const pendingCount = (
-      this.db.prepare('SELECT COUNT(*) as count FROM embedding_metadata WHERE embedding_status = ?').get('pending') as any
+      this.db
+        .prepare('SELECT COUNT(*) as count FROM embedding_metadata WHERE embedding_status = ?')
+        .get('pending') as CountRow
     ).count;
 
     const totalTokens = (
-      this.db.prepare('SELECT SUM(tokens_used) as total FROM messages').get() as any
-    ).total || 0;
+      this.db.prepare('SELECT SUM(tokens_used) as total FROM messages').get() as SumRow
+    ).total ?? 0;
 
     const oldestMsg = (
-      this.db.prepare('SELECT created_at FROM messages ORDER BY created_at ASC LIMIT 1').get() as any
-    )?.created_at || null;
+      this.db
+        .prepare('SELECT created_at FROM messages ORDER BY created_at ASC LIMIT 1')
+        .get() as CreatedAtRow | undefined
+    )?.created_at ?? null;
 
     const newestMsg = (
-      this.db.prepare('SELECT created_at FROM messages ORDER BY created_at DESC LIMIT 1').get() as any
-    )?.created_at || null;
+      this.db
+        .prepare('SELECT created_at FROM messages ORDER BY created_at DESC LIMIT 1')
+        .get() as CreatedAtRow | undefined
+    )?.created_at ?? null;
 
     return {
       total_conversations: conversationCount,
@@ -876,16 +1060,16 @@ export class SQLiteStorage {
       WHERE d.strategy_name = ?
     `);
 
-    const row = stmt.get(strategyName) as any;
+    const row = stmt.get(strategyName) as StrategyPerformanceRow | undefined;
 
     if (!row || row.total_decisions === 0) return null;
 
     return {
       total_decisions: row.total_decisions,
-      avg_response_time: Math.round(row.avg_response_time || 0),
-      avg_tokens_used: Math.round(row.avg_tokens_used || 0),
-      success_rate: row.success_rate || 0,
-      avg_quality: row.avg_quality || 0
+      avg_response_time: Math.round(row.avg_response_time ?? 0),
+      avg_tokens_used: Math.round(row.avg_tokens_used ?? 0),
+      success_rate: row.success_rate ?? 0,
+      avg_quality: row.avg_quality ?? 0
     };
   }
 
@@ -911,23 +1095,23 @@ export class SQLiteStorage {
       WHERE d.selected_model = ?
     `);
 
-    const row = stmt.get(modelName) as any;
+    const row = stmt.get(modelName) as ModelPerformanceRow | undefined;
 
     if (!row || row.total_usage === 0) return null;
 
     return {
       total_usage: row.total_usage,
-      avg_response_time: Math.round(row.avg_response_time || 0),
-      avg_tokens_used: Math.round(row.avg_tokens_used || 0),
-      success_rate: row.success_rate || 0,
-      avg_quality: row.avg_quality || 0
+      avg_response_time: Math.round(row.avg_response_time ?? 0),
+      avg_tokens_used: Math.round(row.avg_tokens_used ?? 0),
+      success_rate: row.success_rate ?? 0,
+      avg_quality: row.avg_quality ?? 0
     };
   }
 
   /**
    * STRATEGY ANALYTICS: Get recent strategy decisions
    */
-  getRecentStrategyDecisions(limit: number = 10): any[] {
+  getRecentStrategyDecisions(limit: number = 10): StrategyDecisionRow[] {
     const stmt = this.db.prepare(`
       SELECT
         d.*,
@@ -941,7 +1125,7 @@ export class SQLiteStorage {
       LIMIT ?
     `);
 
-    return stmt.all(limit) as any[];
+    return stmt.all(limit) as StrategyDecisionRow[];
   }
 
   /**

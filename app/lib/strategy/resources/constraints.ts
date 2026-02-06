@@ -40,8 +40,13 @@ export class ResourceConstraints {
     resources: SystemResourceInfo,
     _config?: ResourceConfig
   ): { valid: boolean; violations: string[] } {
-    void decision;
     void resources;
+    const config = _config ?? {};
+    const hasConfig = Object.keys(config).length > 0;
+    if (hasConfig) {
+      // Constraints are intentionally disabled in workflow-first mode.
+    }
+    void this.getModelRAMRequirement(decision.selectedModel);
     return {
       valid: true,
       violations: []

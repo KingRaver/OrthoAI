@@ -1,11 +1,100 @@
 // components/Chat.tsx
 'use client';
-import { useState, useRef, useEffect, useCallback } from 'react';
-import ReactMarkdown from 'react-markdown';
-import ParticleOrb from './ParticleOrb';
+import { useState, useRef, useEffect, useCallback, memo } from 'react';
+import dynamic from 'next/dynamic';
+import ReactMarkdown, { type Components } from 'react-markdown';
 import TopNav from './TopNav';
 import LeftToolbar, { ToolbarSettings } from './LeftToolbar';
-import { useVoiceFlow } from '@/app/lib/voice/useVoiceFlow';
+import type { VoicePanelHandle } from './VoicePanel';
+
+const VoicePanel = dynamic(() => import('./VoicePanel'), { ssr: false });
+const DEBUG_VOICE = process.env.NEXT_PUBLIC_DEBUG_VOICE === 'true';
+const DEBUG_METRICS = process.env.NEXT_PUBLIC_DEBUG_METRICS === 'true';
+
+const userMarkdownComponents: Components = {
+  p: ({ children }) => (
+    <p className="whitespace-pre-wrap leading-relaxed font-medium text-white text-sm mb-2 last:mb-0">
+      {children}
+    </p>
+  ),
+  code: ({ children }) => (
+    <code className="text-cyan-light bg-white/20 px-1.5 py-0.5 rounded text-xs">
+      {children}
+    </code>
+  ),
+  pre: ({ children }) => (
+    <pre className="bg-slate-900/50 text-cyan-light p-3 rounded-lg overflow-x-auto text-xs my-2">
+      {children}
+    </pre>
+  )
+};
+
+const assistantMarkdownComponents: Components = {
+  p: ({ children }) => (
+    <p className="whitespace-pre-wrap leading-relaxed font-normal text-slate-900 text-sm mb-2 last:mb-0">
+      {children}
+    </p>
+  ),
+  code: ({ children }) => (
+    <code className="text-teal bg-slate-200 px-1.5 py-0.5 rounded text-xs font-mono">
+      {children}
+    </code>
+  ),
+  pre: ({ children }) => (
+    <pre className="bg-slate-800 text-white p-4 rounded-lg overflow-x-auto text-xs my-3 border-2 border-slate-300">
+      {children}
+    </pre>
+  ),
+  ul: ({ children }) => (
+    <ul className="list-disc list-inside text-slate-900 text-sm space-y-1 my-2">{children}</ul>
+  ),
+  ol: ({ children }) => (
+    <ol className="list-decimal list-inside text-slate-900 text-sm space-y-1 my-2">{children}</ol>
+  ),
+  li: ({ children }) => (
+    <li className="text-slate-900">{children}</li>
+  ),
+  h1: ({ children }) => (
+    <h1 className="text-lg font-bold text-slate-900 mt-3 mb-2">{children}</h1>
+  ),
+  h2: ({ children }) => (
+    <h2 className="text-base font-bold text-slate-900 mt-2 mb-1">{children}</h2>
+  ),
+  h3: ({ children }) => (
+    <h3 className="text-sm font-bold text-slate-900 mt-2 mb-1">{children}</h3>
+  ),
+  strong: ({ children }) => (
+    <strong className="font-bold text-slate-900">{children}</strong>
+  ),
+  em: ({ children }) => (
+    <em className="italic text-slate-700">{children}</em>
+  ),
+  a: ({ children, href }) => (
+    <a href={href} className="text-teal hover:text-cyan-light underline" target="_blank" rel="noopener noreferrer">
+      {children}
+    </a>
+  )
+};
+
+const UserMessageContent = memo(({ content }: { content: string }) => (
+  <div className="prose prose-sm prose-invert max-w-none">
+    <ReactMarkdown components={userMarkdownComponents}>
+      {content}
+    </ReactMarkdown>
+  </div>
+));
+
+UserMessageContent.displayName = 'UserMessageContent';
+
+const AssistantMessageContent = memo(({ content }: { content: string }) => (
+  <div className="prose prose-sm prose-slate max-w-none">
+    <ReactMarkdown components={assistantMarkdownComponents}>
+      {content}
+    </ReactMarkdown>
+  </div>
+));
+
+AssistantMessageContent.displayName = 'AssistantMessageContent';
 
 interface Message {
   id: string;
@@ -26,9 +115,27 @@ interface Message {
   };
 }
 
+type LearningContext = NonNullable<Message['learningContext']>;
+type StreamMetadata = {
+  type: 'metadata';
+  decisionId?: string;
+  conversationId?: string;
+  theme?: string;
+  complexity?: number;
+  temperature?: number;
+  maxTokens?: number;
+  modelUsed?: string;
+};
+
+const isStreamMetadata = (value: unknown): value is StreamMetadata => {
+  if (!value || typeof value !== 'object') return false;
+  return (value as { type?: string }).type === 'metadata';
+};
+
 export default function Chat() {
   const DEFAULT_MODEL = 'biomistral-7b-instruct';
   const WORKFLOW_LABEL = 'BioGPT + BioMistral';
+  const MESSAGE_WINDOW_STEP = 50;
 
   // State Management - Chat owns conversation state
   const [messages, setMessages] = useState<Message[]>([]);
@@ -42,6 +149,7 @@ export default function Chat() {
     enableTools: false,
     voiceEnabled: false,
     memoryConsent: false,
+    selectedCaseId: null,
   });
   
   // Refs
@@ -49,28 +157,29 @@ export default function Chat() {
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const userHasScrolledUp = useRef(false);
+  const scrollRafRef = useRef<number | null>(null);
+  const voicePanelRef = useRef<VoicePanelHandle | null>(null);
+  const pendingSpeechRef = useRef<{ text: string; autoResume: boolean } | null>(null);
+  const [visibleCount, setVisibleCount] = useState(MESSAGE_WINDOW_STEP);
+  const renderStartRef = useRef<number>(typeof performance !== 'undefined' ? performance.now() : 0);
 
-  // Voice flow hook - handles STT, TTS, and seamless conversation loop
-  const voice = useVoiceFlow({
-    onTranscript: (text) => {
-      console.log('[Chat] Voice transcript received:', text);
-      // Auto-send transcript to LLM
-      handleSendMessage(text);
-    },
-    onError: (error) => {
-      console.error('[Chat] Voice error:', error);
-      // Error already displayed in voice hook state
-    },
-    onStateChange: (state) => {
-      console.log('[Chat] Voice state changed:', state);
-      // For orb visualization updates
+  const attachVoicePanelRef = useCallback((instance: VoicePanelHandle | null) => {
+    voicePanelRef.current = instance;
+    if (instance && pendingSpeechRef.current) {
+      const pending = pendingSpeechRef.current;
+      pendingSpeechRef.current = null;
+      instance.speakResponse(pending.text, pending.autoResume).catch(() => {});
     }
-  });
+  }, []);
 
   // Auto-scroll to bottom of messages (only if user hasn't scrolled up)
   const scrollToBottom = useCallback(() => {
     if (!userHasScrolledUp.current) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      if (scrollRafRef.current !== null) return;
+      scrollRafRef.current = requestAnimationFrame(() => {
+        scrollRafRef.current = null;
+        messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+      });
     }
   }, []);
 
@@ -86,32 +195,27 @@ export default function Chat() {
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages, isLoading, scrollToBottom]);
-
-  // Store voice functions in refs to avoid infinite loops
-  const voiceRef = useRef(voice);
+  }, [messages.length, isLoading, scrollToBottom]);
 
   useEffect(() => {
-    voiceRef.current = voice;
-  }, [voice]);
-
-  // Handle voice toggle
-  useEffect(() => {
-    if (currentSettings.voiceEnabled) {
-      console.log('[Chat] Voice enabled - starting listening');
-      voiceRef.current.startListening();
-    } else {
-      console.log('[Chat] Voice disabled - stopping');
-      voiceRef.current.stopListening();
+    if (messages.length <= visibleCount) {
+      setVisibleCount(messages.length);
     }
-  }, [currentSettings.voiceEnabled]);
+  }, [messages.length, visibleCount]);
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
-      console.log('[Chat] Cleanup - stopping voice');
-      voiceRef.current.stopListening();
+      if (scrollRafRef.current !== null) {
+        cancelAnimationFrame(scrollRafRef.current);
+      }
     };
+  }, []);
+
+  useEffect(() => {
+    if (DEBUG_METRICS && typeof performance !== 'undefined') {
+      const renderTime = performance.now() - renderStartRef.current;
+      console.log(`[Metrics] Chat initial render: ${Math.round(renderTime)}ms`);
+    }
   }, []);
 
   // Memory consent is now handled by LeftToolbar
@@ -163,7 +267,7 @@ export default function Chat() {
     try {
       // Notify voice system that LLM is thinking
       if (currentSettings.voiceEnabled) {
-        voice.setThinking();
+        voicePanelRef.current?.setThinking();
       }
 
       // Send to LLM API
@@ -180,7 +284,8 @@ export default function Chat() {
           enableTools: currentSettings.enableTools,
           useMemory: currentSettings.memoryConsent,
           manualModeOverride: currentSettings.manualMode || undefined,
-          conversationId: conversationId || undefined
+          conversationId: conversationId || undefined,
+          caseId: currentSettings.selectedCaseId || undefined
         })
       });
 
@@ -221,12 +326,16 @@ export default function Chat() {
         // Speak response if voice enabled (strip markdown for natural speech)
         if (currentSettings.voiceEnabled && content) {
           const cleanedContent = stripMarkdownForSpeech(content);
-          await voice.speakResponse(cleanedContent, true); // true = auto-resume after speaking
+          if (voicePanelRef.current) {
+            await voicePanelRef.current.speakResponse(cleanedContent, true);
+          } else {
+            pendingSpeechRef.current = { text: cleanedContent, autoResume: true };
+          }
         }
       } else {
         // Streaming response (tools disabled)
         let streamDecisionId: string | undefined = undefined;
-        let streamLearningContext: any = undefined;
+        let streamLearningContext: LearningContext | undefined = undefined;
 
         const aiMsg: Message = { id: aiId, role: 'assistant', content: '' };
         setMessages(prev => [...prev, aiMsg]);
@@ -252,10 +361,10 @@ export default function Chat() {
                   if (data === '[DONE]') break;
 
                   try {
-                    const parsed = JSON.parse(data);
+                    const parsed: unknown = JSON.parse(data);
 
                     // Check for metadata message with decision ID
-                    if (parsed.type === 'metadata' && parsed.decisionId) {
+                    if (isStreamMetadata(parsed) && parsed.decisionId) {
                       streamDecisionId = parsed.decisionId;
                       if (parsed.conversationId) {
                         setConversationId(parsed.conversationId);
@@ -274,7 +383,8 @@ export default function Chat() {
                       continue; // Skip rendering this metadata chunk
                     }
 
-                    const content = parsed.choices?.[0]?.delta?.content || '';
+                    const content = (parsed as { choices?: Array<{ delta?: { content?: string } }> })
+                      .choices?.[0]?.delta?.content || '';
                     if (content) {
                       fullContent += content;
                       setMessages(prev => prev.map(msg =>
@@ -296,8 +406,8 @@ export default function Chat() {
               const data = finalLine.slice(6);
               if (data !== '[DONE]') {
                 try {
-                  const parsed = JSON.parse(data);
-                  if (parsed.type === 'metadata' && parsed.decisionId) {
+                  const parsed: unknown = JSON.parse(data);
+                  if (isStreamMetadata(parsed) && parsed.decisionId) {
                     streamDecisionId = parsed.decisionId;
                     if (parsed.conversationId) {
                       setConversationId(parsed.conversationId);
@@ -308,13 +418,14 @@ export default function Chat() {
                       temperature: parsed.temperature,
                       maxTokens: parsed.maxTokens,
                       toolsEnabled: currentSettings.enableTools,
-                        modelUsed: parsed.modelUsed || DEFAULT_MODEL,
+                      modelUsed: parsed.modelUsed || DEFAULT_MODEL,
                       responseTime: 0,
                       tokensUsed: 0,
                       mode: currentSettings.manualMode || 'auto'
                     };
                   } else {
-                    const content = parsed.choices?.[0]?.delta?.content || '';
+                    const content = (parsed as { choices?: Array<{ delta?: { content?: string } }> })
+                      .choices?.[0]?.delta?.content || '';
                     if (content) {
                       fullContent += content;
                       setMessages(prev => prev.map(msg =>
@@ -355,7 +466,11 @@ export default function Chat() {
           // Speak full response if voice enabled (strip markdown for natural speech)
           if (currentSettings.voiceEnabled && fullContent) {
             const cleanedContent = stripMarkdownForSpeech(fullContent);
-            await voice.speakResponse(cleanedContent, true); // true = auto-resume after speaking
+            if (voicePanelRef.current) {
+              await voicePanelRef.current.speakResponse(cleanedContent, true);
+            } else {
+              pendingSpeechRef.current = { text: cleanedContent, autoResume: true };
+            }
           }
         }
       }
@@ -379,6 +494,9 @@ export default function Chat() {
       handleSendMessage();
     }
   };
+
+  const hiddenCount = Math.max(0, messages.length - visibleCount);
+  const visibleMessages = hiddenCount > 0 ? messages.slice(-visibleCount) : messages;
 
   // Handle user feedback for continuous learning
   const handleFeedback = async (messageId: string, feedback: 'positive' | 'negative') => {
@@ -424,7 +542,7 @@ export default function Chat() {
       />
 
       {/* Main Chat Container - Professional Light Background */}
-      <div className="flex-1 min-h-0 px-6 pb-8 pt-6 overflow-hidden box-border bg-gradient-to-br from-slate-50 via-cyan-50/30 to-slate-50">
+      <div className="flex-1 min-h-0 px-6 pb-8 pt-6 overflow-hidden box-border bg-linear-to-br from-slate-50 via-cyan-50/30 to-slate-50">
         <div className="max-w-6xl mx-auto flex flex-col gap-4 h-full min-h-0 overflow-hidden">
           <div className="flex flex-col md:flex-row gap-6 flex-1 min-h-0">
             <LeftToolbar
@@ -433,7 +551,7 @@ export default function Chat() {
             <div className="flex-1 flex flex-col gap-6 min-h-0">
 
               {/* Messages Container */}
-              <div className="flex-1 flex flex-col bg-gradient-to-br from-orange-50/95 to-rose-50/85 backdrop-blur-lg rounded-3xl p-8 border border-orange-200/60 shadow-inner shadow-orange-100/40 overflow-hidden min-h-0">
+              <div className="flex-1 flex flex-col bg-linear-to-br from-orange-50/95 to-rose-50/85 backdrop-blur-lg rounded-3xl p-8 border border-orange-200/60 shadow-inner shadow-orange-100/40 overflow-hidden min-h-0">
                 <div
                   ref={messagesContainerRef}
                   onScroll={handleScroll}
@@ -442,7 +560,7 @@ export default function Chat() {
                   {messages.length === 0 ? (
                     // Empty State
                     <div className="flex flex-col items-center justify-center h-full text-slate-400">
-                      <div className="w-24 h-24 mb-6 rounded-2xl bg-gradient-to-r from-cyan-light/30 to-teal/30 border-2 border-cyan-light/40 animate-pulse shadow-lg" />
+                      <div className="w-24 h-24 mb-6 rounded-2xl bg-linear-to-r from-cyan-light/30 to-teal/30 border-2 border-cyan-light/40 animate-pulse shadow-lg" />
                       <p className="text-lg font-bold text-slate-500 tracking-tight">
                         Select your OrthoAI mode
                       </p>
@@ -452,53 +570,35 @@ export default function Chat() {
                     </div>
                   ) : (
                     <>
+                      {hiddenCount > 0 && (
+                        <div className="flex justify-center">
+                          <button
+                            onClick={() => setVisibleCount(prev => Math.min(messages.length, prev + MESSAGE_WINDOW_STEP))}
+                            className="text-xs font-medium text-slate-600 bg-white/80 border border-slate-200 px-3 py-1 rounded-full shadow-sm hover:bg-white hover:text-slate-800 transition-colors"
+                          >
+                            Show earlier messages ({hiddenCount})
+                          </button>
+                        </div>
+                      )}
                       {/* Message List */}
-                      {messages.map((msg: Message) => (
+                      {visibleMessages.map((msg: Message) => (
                         <div
                           key={msg.id}
                           className={`flex ${
                             msg.role === 'user' ? 'justify-end' : 'justify-start'
                           } animate-in slide-in-from-bottom-3 duration-300 ease-out`}
+                          style={{ contentVisibility: 'auto' }}
                         >
                           {msg.role === 'user' ? (
                             // User Message - Right aligned with teal/cyan gradient
-                            <div className="max-w-2xl p-6 rounded-2xl shadow-lg border-2 border-teal/50 bg-gradient-to-br from-teal/90 to-cyan-light/80 text-white hover:shadow-xl hover:shadow-teal/40 transition-all duration-200 hover:border-teal/70">
-                              <div className="prose prose-sm prose-invert max-w-none">
-                                <ReactMarkdown
-                                  components={{
-                                    p: ({children}) => <p className="whitespace-pre-wrap leading-relaxed font-medium text-white text-sm mb-2 last:mb-0">{children}</p>,
-                                    code: ({children}) => <code className="text-cyan-light bg-white/20 px-1.5 py-0.5 rounded text-xs">{children}</code>,
-                                    pre: ({children}) => <pre className="bg-slate-900/50 text-cyan-light p-3 rounded-lg overflow-x-auto text-xs my-2">{children}</pre>
-                                  }}
-                                >
-                                  {msg.content}
-                                </ReactMarkdown>
-                              </div>
+                            <div className="max-w-2xl p-6 rounded-2xl shadow-lg border-2 border-teal/50 bg-linear-to-br from-teal/90 to-cyan-light/80 text-white hover:shadow-xl hover:shadow-teal/40 transition-all duration-200 hover:border-teal/70">
+                              <UserMessageContent content={msg.content} />
                             </div>
                           ) : (
                             // Assistant Message - Left aligned with slate background
                             <div className="max-w-2xl">
                               <div className="p-6 rounded-2xl shadow-md border-2 border-slate-200 bg-slate-100/80 text-slate-900 hover:shadow-lg hover:shadow-teal/20 transition-all duration-200 hover:bg-slate-100 hover:border-slate-300">
-                                <div className="prose prose-sm prose-slate max-w-none">
-                                  <ReactMarkdown
-                                    components={{
-                                      p: ({children}) => <p className="whitespace-pre-wrap leading-relaxed font-normal text-slate-900 text-sm mb-2 last:mb-0">{children}</p>,
-                                      code: ({children}) => <code className="text-teal bg-slate-200 px-1.5 py-0.5 rounded text-xs font-mono">{children}</code>,
-                                      pre: ({children}) => <pre className="bg-slate-800 text-white p-4 rounded-lg overflow-x-auto text-xs my-3 border-2 border-slate-300">{children}</pre>,
-                                      ul: ({children}) => <ul className="list-disc list-inside text-slate-900 text-sm space-y-1 my-2">{children}</ul>,
-                                      ol: ({children}) => <ol className="list-decimal list-inside text-slate-900 text-sm space-y-1 my-2">{children}</ol>,
-                                      li: ({children}) => <li className="text-slate-900">{children}</li>,
-                                      h1: ({children}) => <h1 className="text-lg font-bold text-slate-900 mt-3 mb-2">{children}</h1>,
-                                      h2: ({children}) => <h2 className="text-base font-bold text-slate-900 mt-2 mb-1">{children}</h2>,
-                                      h3: ({children}) => <h3 className="text-sm font-bold text-slate-900 mt-2 mb-1">{children}</h3>,
-                                      strong: ({children}) => <strong className="font-bold text-slate-900">{children}</strong>,
-                                      em: ({children}) => <em className="italic text-slate-700">{children}</em>,
-                                      a: ({children, href}) => <a href={href} className="text-teal hover:text-cyan-light underline" target="_blank" rel="noopener noreferrer">{children}</a>
-                                    }}
-                                  >
-                                    {msg.content}
-                                  </ReactMarkdown>
-                                </div>
+                                <AssistantMessageContent content={msg.content} />
                               </div>
 
                               {/* Feedback Buttons - Continuous Learning UI - Now available for ALL modes! */}
@@ -565,32 +665,23 @@ export default function Chat() {
           {/* Input Area - Voice or Text Mode */}
           {currentSettings.voiceEnabled ? (
             // Voice Mode - Seamless Conversation Loop
-            <div className="flex flex-col items-center gap-6 py-6">
-              <ParticleOrb
-                state={voice.state === 'auto-resuming' ? 'listening' : (voice.state as any)}
-                audioLevel={voice.audioLevel}
-                beat={voice.audioFrequency.beat}
-                disabled={isLoading || !currentSettings.voiceEnabled}
-                onClick={() => {
-                  // Toggle voice on/off via the orb - update via LeftToolbar settings
-                  setCurrentSettings(prev => ({ ...prev, voiceEnabled: !prev.voiceEnabled }));
-                }}
-              />
-
-              {/* Voice Error Display */}
-              {voice.error && (
-                <div className="text-center text-red-600 text-sm font-medium">
-                  {voice.error}
-                </div>
-              )}
-
-              {/* Auto-Resume Status */}
-              {voice.state === 'auto-resuming' && (
-                <div className="text-center text-teal/70 text-xs font-medium animate-pulse">
-                  Ready to listen...
-                </div>
-              )}
-            </div>
+            <VoicePanel
+              ref={attachVoicePanelRef}
+              enabled={currentSettings.voiceEnabled}
+              isLoading={isLoading}
+              onTranscript={(text) => {
+                if (DEBUG_VOICE) {
+                  console.log('[Chat] Voice transcript received:', text);
+                }
+                handleSendMessage(text);
+              }}
+              onError={(error) => {
+                console.error('[Chat] Voice error:', error);
+              }}
+              onToggle={() => {
+                setCurrentSettings(prev => ({ ...prev, voiceEnabled: !prev.voiceEnabled }));
+              }}
+            />
           ) : (
             // Text Mode - Input Area
             <div className="flex gap-3 p-2 bg-white/80 backdrop-blur-lg rounded-2xl border-2 border-cyan-light/40 shadow-xl hover:border-cyan-light/60 transition-all duration-200 hover:shadow-2xl">
@@ -607,7 +698,7 @@ export default function Chat() {
               <button
                 onClick={() => handleSendMessage()}
                 disabled={isLoading || !input.trim()}
-                className="px-8 py-5 bg-gradient-to-r from-yellow/90 to-peach/90 text-slate-900 font-bold rounded-xl shadow-lg hover:shadow-yellow/40 transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap hover:scale-105 active:scale-95 text-sm tracking-wide border-2 border-slate-900/20"
+                className="px-8 py-5 bg-linear-to-r from-yellow/90 to-peach/90 text-slate-900 font-bold rounded-xl shadow-lg hover:shadow-yellow/40 transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap hover:scale-105 active:scale-95 text-sm tracking-wide border-2 border-slate-900/20"
               >
                 Send
               </button>
@@ -631,6 +722,7 @@ export default function Chat() {
                 : '📌'
             } ${currentSettings.manualMode}`}
             {currentSettings.voiceEnabled && ' • 🎤 Voice Active'}
+            {currentSettings.selectedCaseId && ' • 📋 Case Context Active'}
           </div>
         </div>
       </div>

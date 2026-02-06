@@ -44,7 +44,7 @@ export interface StrategyDecision {
   complexityScore: number; // 0-100
   
   // Metadata
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
 }
 
 // ============================================================
@@ -110,6 +110,7 @@ export interface StrategyContext {
   // User input
   userMessage: string;
   conversationHistory: ConversationMessage[];
+  conversationId?: string;
   
   // Domain detection (from contextDetector)
   detectedMode: DetectionMode;
@@ -197,7 +198,7 @@ export interface StrategyOutcome {
   errorOccurred: boolean;
   retryCount: number;
   userFeedback?: 'positive' | 'negative' | 'neutral';
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
 }
 
 // ============================================================
@@ -306,7 +307,7 @@ export class StrategyError extends Error {
   constructor(
     message: string,
     public code: string,
-    public details?: any
+    public details?: unknown
   ) {
     super(message);
     this.name = 'StrategyError';
@@ -314,14 +315,14 @@ export class StrategyError extends Error {
 }
 
 export class ResourceConstraintError extends StrategyError {
-  constructor(message: string, details?: any) {
+  constructor(message: string, details?: unknown) {
     super(message, 'RESOURCE_CONSTRAINT', details);
     this.name = 'ResourceConstraintError';
   }
 }
 
 export class ModelUnavailableError extends StrategyError {
-  constructor(message: string, details?: any) {
+  constructor(message: string, details?: unknown) {
     super(message, 'MODEL_UNAVAILABLE', details);
     this.name = 'ModelUnavailableError';
   }

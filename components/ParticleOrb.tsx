@@ -1,7 +1,14 @@
 'use client';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { VoiceState } from '../app/lib/voice/voiceStateManager';
+
+type DeviceMemoryNavigator = Navigator & { deviceMemory?: number };
+
+const DEBUG_VOICE = process.env.NEXT_PUBLIC_DEBUG_VOICE === 'true';
+const orbLog = (...args: unknown[]) => {
+  if (DEBUG_VOICE) console.log(...args);
+};
 
 interface ParticleOrbProps {
   state: VoiceState;
@@ -78,40 +85,50 @@ const ParticleOrb: React.FC<ParticleOrbProps> = ({
   };
 
   useEffect(() => {
-    if (!containerRef.current) return;
+    const container = containerRef.current;
+    if (!container) return;
 
     // Prevent multiple initializations
     if (rendererRef.current) {
-      console.log('[ParticleOrb] Already initialized, skipping');
+      orbLog('[ParticleOrb] Already initialized, skipping');
       return;
     }
 
-    console.log('[ParticleOrb] Initializing Three.js scene');
+    orbLog('[ParticleOrb] Initializing Three.js scene');
 
     // Scene setup
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(
       75,
-      containerRef.current.clientWidth / containerRef.current.clientHeight,
+      container.clientWidth / container.clientHeight,
       0.1,
       1000
     );
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
 
     renderer.setSize(
-      containerRef.current.clientWidth,
-      containerRef.current.clientHeight
+      container.clientWidth,
+      container.clientHeight
     );
     renderer.setClearColor(0x000000, 0);
-    containerRef.current.appendChild(renderer.domElement);
+    container.appendChild(renderer.domElement);
 
     camera.position.z = 3;
 
+    const isLowPower =
+      (typeof navigator !== 'undefined' &&
+        (((navigator as DeviceMemoryNavigator).deviceMemory ?? Infinity) <= 4)) ||
+      (typeof navigator !== 'undefined' &&
+        navigator.hardwareConcurrency !== undefined &&
+        navigator.hardwareConcurrency <= 4);
+
     // Create particle geometry
-    const particleCount = 1000;
+    const particleCount = isLowPower ? 600 : 1000;
     const geometry = new THREE.BufferGeometry();
     const positions = new Float32Array(particleCount * 3);
     const velocities = new Float32Array(particleCount * 3);
+    const jitter = new Float32Array(particleCount);
+    const jitterPhase = new Float32Array(particleCount);
 
     // Initialize particles in sphere pattern
     for (let i = 0; i < particleCount; i++) {
@@ -126,6 +143,9 @@ const ParticleOrb: React.FC<ParticleOrbProps> = ({
       velocities[i * 3] = (Math.random() - 0.5) * 0.02;
       velocities[i * 3 + 1] = (Math.random() - 0.5) * 0.02;
       velocities[i * 3 + 2] = (Math.random() - 0.5) * 0.02;
+
+      jitter[i] = (Math.random() - 0.5) * 0.05;
+      jitterPhase[i] = Math.random() * Math.PI * 2;
     }
 
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
@@ -148,7 +168,13 @@ const ParticleOrb: React.FC<ParticleOrbProps> = ({
 
     let time = 0;
     let targetColor = getStateColor(stateRef.current);
-    let currentColor = new THREE.Color(targetColor);
+    const currentColor = new THREE.Color(targetColor);
+    const maxRadius = 2.5;
+    const pixelRatio = typeof window !== 'undefined'
+      ? Math.min(window.devicePixelRatio || 1, isLowPower ? 1.5 : 2)
+      : 1;
+
+    renderer.setPixelRatio(pixelRatio);
 
     // Animation loop
     const animate = () => {
@@ -165,6 +191,8 @@ const ParticleOrb: React.FC<ParticleOrbProps> = ({
       const positionArray = geometry.getAttribute('position') as THREE.BufferAttribute;
       const positions = positionArray.array as Float32Array;
 
+      const audioLevel = audioLevelRef.current;
+      const beatLevel = beatRef.current;
       for (let i = 0; i < particleCount; i++) {
         const idx = i * 3;
 
@@ -180,7 +208,6 @@ const ParticleOrb: React.FC<ParticleOrbProps> = ({
         const distFromCenter = Math.sqrt(x * x + y * y + z * z);
 
         // Boundary: keep particles in sphere
-        const maxRadius = 2.5;
         if (distFromCenter > maxRadius) {
           const scale = maxRadius / distFromCenter;
           positions[idx] *= scale;
@@ -201,7 +228,7 @@ const ParticleOrb: React.FC<ParticleOrbProps> = ({
           velocities[idx + 2] -= z * 0.001;
         } else if (stateRef.current === 'speaking') {
           // Outward pulse
-          const pulse = 0.5 + 0.5 * Math.sin(time * 3 + i * 0.1);
+          const pulse = 0.5 + 0.5 * Math.sin(time * 3 + jitterPhase[i]);
           velocities[idx] += (x / distFromCenter) * pulse * 0.002;
           velocities[idx + 1] += (y / distFromCenter) * pulse * 0.002;
           velocities[idx + 2] += (z / distFromCenter) * pulse * 0.002;
@@ -213,15 +240,15 @@ const ParticleOrb: React.FC<ParticleOrbProps> = ({
         velocities[idx + 2] *= 0.98;
 
         // Audio reactivity (reads from parent props via ref)
-        if (audioLevelRef.current > 0) {
-          const randomForce = (Math.random() - 0.5) * audioLevelRef.current * 0.05;
+        if (audioLevel > 0) {
+          const randomForce = jitter[i] * audioLevel;
           velocities[idx] += randomForce;
           velocities[idx + 1] += randomForce;
           velocities[idx + 2] += randomForce;
         }
 
         // Beat pulse (reads from parent props via ref)
-        const beatPulse = beatRef.current * 0.2;
+        const beatPulse = beatLevel * 0.2;
         const scale = 1 + beatPulse;
         positions[idx] *= scale;
         positions[idx + 1] *= scale;
@@ -235,7 +262,7 @@ const ParticleOrb: React.FC<ParticleOrbProps> = ({
       particles.rotation.y += 0.0004;
 
       // Scale based on audio level and beat (reads from parent props via ref)
-      const scale = 1 + audioLevelRef.current * 0.3 + beatRef.current * 0.2;
+      const scale = 1 + audioLevel * 0.3 + beatLevel * 0.2;
       particles.scale.set(scale, scale, scale);
 
       // Render
@@ -246,10 +273,8 @@ const ParticleOrb: React.FC<ParticleOrbProps> = ({
 
     // Handle window resize
     const handleResize = () => {
-      if (!containerRef.current) return;
-
-      const width = containerRef.current.clientWidth;
-      const height = containerRef.current.clientHeight;
+      const width = container.clientWidth;
+      const height = container.clientHeight;
 
       camera.aspect = width / height;
       camera.updateProjectionMatrix();
@@ -266,8 +291,8 @@ const ParticleOrb: React.FC<ParticleOrbProps> = ({
       renderer.dispose();
       geometry.dispose();
       material.dispose();
-      if (containerRef.current && renderer.domElement.parentNode === containerRef.current) {
-        containerRef.current.removeChild(renderer.domElement);
+      if (renderer.domElement.parentNode === container) {
+        container.removeChild(renderer.domElement);
       }
     };
   }, []); // Only run once on mount

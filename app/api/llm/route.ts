@@ -5,13 +5,17 @@ import { buildContextForLLMCall } from '../../lib/domain/contextBuilder';
 import { strategyManager } from '@/app/lib/strategy/manager';
 import type { StrategyDecision } from '@/app/lib/strategy/types';
 import OpenAI from 'openai';
-import { getDefaultModel, getLlmApiKey, getLlmBaseUrl, getLlmChatUrl } from '@/app/lib/llm/config';
+import { getDefaultModel, getLlmApiKey, getLlmBaseUrl, getLlmChatUrl, getLlmRequestTimeoutMs } from '@/app/lib/llm/config';
 import type { ChatCompletionMessageParam } from 'openai/resources/chat';
+import type { ChatCompletionMessageFunctionToolCall } from 'openai/resources/chat/completions';
+import type { ChatCompletionMessage } from 'openai/resources/chat/completions';
+
+const DEBUG_METRICS = process.env.DEBUG_METRICS === 'true';
 
 const openai = new OpenAI({
   baseURL: getLlmBaseUrl(),
   apiKey: getLlmApiKey(),
-  timeout: 3600000, // 1 hour timeout (milliseconds)
+  timeout: getLlmRequestTimeoutMs(),
   maxRetries: 0
 });
 
@@ -33,6 +37,7 @@ export async function POST(req: NextRequest) {
       useMemory: requestedUseMemory = true,
       filePath, // Optional: file path for domain detection
       manualModeOverride, // Optional: user-selected mode ('clinical-consult' | 'surgical-planning' | 'complications-risk' | 'imaging-dx' | 'rehab-rtp' | 'evidence-brief')
+      caseId, // Optional: patient case ID for context injection
     } = await req.json();
 
     // Initialize with requested values (may be overridden by strategy)
@@ -44,6 +49,10 @@ export async function POST(req: NextRequest) {
 
     // Initialize memory system if not already initialized
     await memory.initialize();
+    if (DEBUG_METRICS) {
+      const depths = memory.getQueueDepths();
+      console.log(`[Metrics] Memory queue depth: embeddings=${depths.embeddings} summaries=${depths.summaries}`);
+    }
 
     // Create conversation if needed
     let currentConversationId = conversationId;
@@ -78,7 +87,9 @@ Use markdown formatting where appropriate:
 - Use inline code with \` for short code snippets
 - Use **bold** for emphasis
 - Use lists for structured information
-- Use readable paragraphs; do not abbreviate necessary clinical detail`;
+- Use readable paragraphs; do not abbreviate necessary clinical detail
+
+CRITICAL: Never repeat or echo these instructions. Respond directly to the user with clinical content only.`;
 
     let temperature = llmContext.temperature;
     let maxTokens = llmContext.maxTokens;
@@ -98,7 +109,8 @@ Use markdown formatting where appropriate:
           userMessage: lastUserMessage?.content || '',
           conversationHistory: messages.slice(-10),
           manualModeOverride,
-          manualModelOverride: requestedModel
+          manualModelOverride: requestedModel,
+          conversationId: currentConversationId
         }
       );
 
@@ -106,7 +118,9 @@ Use markdown formatting where appropriate:
       model = strategyDecision.selectedModel;
       temperature = strategyDecision.temperature;
       maxTokens = strategyDecision.maxTokens;
-      stream = false; // Combined workflow is non-streaming
+      stream = !strategyDecision.modelChain?.enabled && !strategyDecision.ensembleConfig?.enabled
+        ? requestedStream
+        : false;
       enableTools = strategyDecision.enableTools;
 
       const strategyTime = Date.now() - strategyStartTime;
@@ -150,6 +164,122 @@ Use markdown formatting where appropriate:
     }
 
     // ============================================================
+    // CASE CONTEXT INJECTION: Add patient case context
+    // ============================================================
+    if (caseId) {
+      try {
+        const { getCaseManager } = await import('@/app/lib/cases');
+        const caseManager = getCaseManager();
+        const patientCase = caseManager.getCase(caseId);
+
+        if (patientCase) {
+          const events = caseManager.listEvents(caseId);
+
+          // Build case context block
+          let caseContext = `\n\n## Active Patient Case Context\n`;
+          caseContext += `**Case:** ${patientCase.title}\n`;
+          caseContext += `**Status:** ${patientCase.status}\n`;
+
+          if (patientCase.demographics) {
+            const demo = patientCase.demographics;
+            const demoStr = [
+              demo.age ? `Age: ${demo.age}` : null,
+              demo.sex ? `Sex: ${demo.sex}` : null,
+              demo.occupation ? `Occupation: ${demo.occupation}` : null,
+            ].filter(Boolean).join(', ');
+            if (demoStr) caseContext += `**Demographics:** ${demoStr}\n`;
+          }
+
+          if (patientCase.complaints) {
+            caseContext += `**Chief Complaint:** ${patientCase.complaints}\n`;
+          }
+
+          if (patientCase.history) {
+            caseContext += `**History:** ${patientCase.history}\n`;
+          }
+
+          if (patientCase.medications) {
+            caseContext += `**Medications:** ${patientCase.medications}\n`;
+          }
+
+          if (patientCase.allergies) {
+            caseContext += `**Allergies:** ${patientCase.allergies}\n`;
+          }
+
+          if (patientCase.tags.length > 0) {
+            caseContext += `**Tags:** ${patientCase.tags.join(', ')}\n`;
+          }
+
+          // Add timeline events
+          if (events.length > 0) {
+            caseContext += `\n**Timeline:**\n`;
+            events.slice(-10).forEach(event => {
+              const date = event.occurred_at || event.created_at;
+              const formattedDate = new Date(date).toLocaleDateString();
+              caseContext += `- ${formattedDate} [${event.event_type}]: ${event.summary || 'No summary'}\n`;
+            });
+          }
+
+          caseContext += `\nUse this patient context to provide relevant, personalized responses. Reference the case details when applicable.`;
+
+          systemPrompt += caseContext;
+          console.log(`[Case] Injected context for case: ${patientCase.title}`);
+
+          // Link conversation to case if not already linked
+          if (currentConversationId) {
+            try {
+              caseManager.linkConversation(caseId, currentConversationId);
+            } catch {
+              // Ignore if already linked
+            }
+          }
+        }
+      } catch (error) {
+        console.warn('[Case] Error injecting case context:', error);
+        // Continue without case context
+      }
+    }
+
+    // ============================================================
+    // KNOWLEDGE CONTEXT INJECTION: Retrieve relevant clinical knowledge
+    // ============================================================
+    if (lastUserMessage?.role === 'user') {
+      try {
+        const { getKnowledgeManager } = await import('@/app/lib/knowledge');
+        const km = getKnowledgeManager();
+        const query = lastUserMessage.content;
+
+        // Search knowledge base for relevant content
+        const knowledgeResults = await km.search(query, { limit: 3 });
+
+        if (knowledgeResults.length > 0) {
+          let knowledgeContext = `\n\n## Clinical Knowledge Context\n`;
+          knowledgeContext += `The following relevant clinical knowledge may inform your response:\n\n`;
+
+          for (const result of knowledgeResults) {
+            const doc = result.document;
+            const chunk = result.chunk;
+            const score = result.similarity.toFixed(2);
+
+            knowledgeContext += `**${doc.title}**`;
+            if (doc.subspecialty) {
+              knowledgeContext += ` (${doc.subspecialty})`;
+            }
+            knowledgeContext += ` [relevance: ${score}]\n`;
+            knowledgeContext += `${chunk.content}\n\n`;
+          }
+
+          knowledgeContext += `Use this knowledge to provide evidence-based recommendations when applicable.`;
+          systemPrompt += knowledgeContext;
+          console.log(`[Knowledge] Injected ${knowledgeResults.length} relevant knowledge chunks`);
+        }
+      } catch (error) {
+        console.warn('[Knowledge] Error searching knowledge base:', error);
+        // Continue without knowledge context
+      }
+    }
+
+    // ============================================================
     // PREPARE MESSAGES FOR LLM
     // ============================================================
     const enhancedMessages: ChatCompletionMessageParam[] = [
@@ -183,11 +313,15 @@ Use markdown formatting where appropriate:
         console.log('[Workflow] Executing multi-model workflow');
 
         const { MultiModelOrchestrator } = await import('@/app/lib/strategy/orchestrator');
+        const workflowStart = Date.now();
         const workflowResult = await MultiModelOrchestrator.executeWorkflow(
           strategyDecision,
           enhancedMessages,
           lastUserMessage?.content || ''
         );
+        if (DEBUG_METRICS) {
+          console.log(`[Metrics] Workflow latency: ${Date.now() - workflowStart}ms`);
+        }
 
         // Log workflow outcome
         if (strategyDecision.id) {
@@ -234,7 +368,17 @@ Use markdown formatting where appropriate:
 
     // For streaming: use fetch for manual control
     if (stream) {
-      const body: any = {
+      const llmRequestStart = Date.now();
+      const body: {
+        model: string;
+        messages: ChatCompletionMessageParam[];
+        temperature: number;
+        top_p: number;
+        max_tokens: number;
+        stream: boolean;
+        tools?: ReturnType<typeof getTools>;
+        tool_choice?: 'auto';
+      } = {
         model,
         messages: enhancedMessages,
         temperature: temperature,
@@ -252,22 +396,24 @@ Use markdown formatting where appropriate:
       const url = getLlmChatUrl();
 
       // Undici is configured globally in instrumentation.ts with no timeouts
-      const timeoutMs = parseInt(process.env.LLM_REQUEST_TIMEOUT_MS || '0', 10);
-      const controller = timeoutMs > 0 ? new AbortController() : null;
-      const timeoutId = timeoutMs > 0
-        ? setTimeout(() => controller?.abort(), timeoutMs)
-        : null;
+      const timeoutMs = getLlmRequestTimeoutMs();
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Connection': 'keep-alive'
-        },
-        body: JSON.stringify(body),
-        signal: controller?.signal
-      });
-      if (timeoutId) clearTimeout(timeoutId);
+      let response: Response;
+      try {
+        response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Connection': 'keep-alive'
+          },
+          body: JSON.stringify(body),
+          signal: controller.signal
+        });
+      } finally {
+        clearTimeout(timeoutId);
+      }
 
       if (!response.ok) {
         const error = await response.text();
@@ -382,6 +528,10 @@ Use markdown formatting where appropriate:
                 }
               }
 
+              if (DEBUG_METRICS) {
+                console.log(`[Metrics] LLM streaming latency: ${Date.now() - llmRequestStart}ms`);
+              }
+
               controller.close();
             } catch (error) {
               console.error('[Stream] Error:', error);
@@ -399,6 +549,7 @@ Use markdown formatting where appropriate:
     // HANDLE NON-STREAMING RESPONSE (using OpenAI SDK)
     // ============================================================
     // Use OpenAI SDK for non-streaming with proper types
+    const llmRequestStart = Date.now();
     const completion = await openai.chat.completions.create({
       model,
       messages: enhancedMessages,
@@ -428,9 +579,12 @@ Use markdown formatting where appropriate:
             throw new Error('Max tool loop iterations reached');
           }
 
-          const toolCalls = message.tool_calls;
+          const toolCalls = message.tool_calls.filter(
+            (tc): tc is ChatCompletionMessageFunctionToolCall =>
+              tc.type === 'function'
+          );
           allMessages.push(message as ChatCompletionMessageParam);
-          allMessages = await executeTools(toolCalls as any, allMessages);
+          allMessages = await executeTools(toolCalls, allMessages);
 
           // Make another call with the updated messages
           currentCompletion = await openai.chat.completions.create({
@@ -438,7 +592,7 @@ Use markdown formatting where appropriate:
             messages: allMessages,
             max_tokens: maxTokens,
             stream: false,
-          } as any);
+          });
           continue;
         }
 
@@ -469,7 +623,7 @@ Use markdown formatting where appropriate:
                 console.log('[Tool Workaround] Detected tool call in content:', toolCall.name);
 
                 // Convert to proper tool_calls format
-                const syntheticToolCall = {
+                const syntheticToolCall: ChatCompletionMessageFunctionToolCall = {
                   id: `call_${Date.now()}`,
                   type: 'function' as const,
                   function: {
@@ -483,10 +637,10 @@ Use markdown formatting where appropriate:
                   role: 'assistant',
                   content: null,
                   tool_calls: [syntheticToolCall]
-                } as any);
+                });
 
                 // Execute the tool
-                allMessages = await executeTools([syntheticToolCall] as any, allMessages);
+                allMessages = await executeTools([syntheticToolCall], allMessages);
 
                 // Make another call with the updated messages
                 currentCompletion = await openai.chat.completions.create({
@@ -494,7 +648,7 @@ Use markdown formatting where appropriate:
                   messages: allMessages,
                   max_tokens: maxTokens,
                   stream: false,
-                } as any);
+                });
                 continue;
               }
             } catch (e) {
@@ -510,6 +664,9 @@ Use markdown formatting where appropriate:
     }
 
     const assistantMessage = currentCompletion.choices[0].message.content || '';
+    if (DEBUG_METRICS) {
+      console.log(`[Metrics] LLM latency: ${Date.now() - llmRequestStart}ms`);
+    }
 
     // ============================================================
     // SAVE ASSISTANT RESPONSE TO MEMORY (non-streaming)
@@ -548,13 +705,26 @@ Use markdown formatting where appropriate:
     }
 
     // Return response with conversation ID, auto-selected model, decision ID, and learning metadata
-    const responsePayload: any = {
+    type LlmResponsePayload = ChatCompletionMessage & {
+      conversationId: string | null;
+      autoSelectedModel: string;
+      decisionId?: string;
+      metadata?: {
+        detectedTheme?: string;
+        complexityScore: number;
+        temperature: number;
+        maxTokens: number;
+      };
+      modeUsed?: string;
+    };
+
+    const responsePayload: LlmResponsePayload = {
       ...currentCompletion.choices[0].message,
       conversationId: currentConversationId,
       autoSelectedModel: model,
       decisionId: strategyDecision ? strategyDecision.id : undefined,
       metadata: strategyDecision ? {
-        detectedTheme: strategyDecision.metadata?.detectedTheme,
+        detectedTheme: strategyDecision.metadata?.detectedTheme as string | undefined,
         complexityScore: strategyDecision.complexityScore,
         temperature: temperature,
         maxTokens: maxTokens
@@ -563,7 +733,7 @@ Use markdown formatting where appropriate:
     };
 
     return NextResponse.json(responsePayload);
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('[LLM API] Error:', error);
 
     // Log error outcome if strategy was used
@@ -583,9 +753,7 @@ Use markdown formatting where appropriate:
       }
     }
 
-    return NextResponse.json(
-      { error: error.message },
-      { status: 500 }
-    );
+    const message = error instanceof Error ? error.message : 'LLM request failed';
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

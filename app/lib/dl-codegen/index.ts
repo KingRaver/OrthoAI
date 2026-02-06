@@ -107,9 +107,9 @@ export class DLCodeGen {
     };
   }
 
-  async train(datasetPath: string): Promise<{ loss: number; accuracy: number }> {
-    const dataset = await preprocessCodeData(datasetPath);
-    return trainModel(dataset, this.modelPath, this.config);
+  async train(dataset: string | CodeDataset): Promise<{ loss: number; accuracy: number }> {
+    const processed = await preprocessCodeData(dataset);
+    return trainModel(processed, this.modelPath, this.config);
   }
 
   static getInstance(): DLCodeGen {

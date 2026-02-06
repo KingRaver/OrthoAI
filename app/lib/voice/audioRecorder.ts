@@ -102,6 +102,12 @@ class WAVEncoder {
   }
 }
 
+declare global {
+  interface Window {
+    webkitAudioContext?: typeof AudioContext;
+  }
+}
+
 /**
  * Audio Recorder using AudioContext for raw PCM recording
  * Useful for high-quality, low-latency recording
@@ -109,7 +115,8 @@ class WAVEncoder {
 class AudioContextRecorder {
   private audioContext: AudioContext | null = null;
   private mediaStreamSource: MediaStreamAudioSourceNode | null = null;
-  private processor: ScriptProcessorNode | null = null;
+  private workletNode: AudioWorkletNode | null = null;
+  private workletUrl: string | null = null;
   private audioData: Float32Array[] = [];
   private sampleRate: number = 0;
   private isRecording: boolean = false;
@@ -118,28 +125,35 @@ class AudioContextRecorder {
    * Initialize recorder with a media stream
    */
   async init(stream: MediaStream): Promise<void> {
-    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const AudioContextCtor = window.AudioContext ?? window.webkitAudioContext;
+    if (!AudioContextCtor) {
+      throw new Error('AudioContext is not supported in this environment');
+    }
+    const audioContext = new AudioContextCtor();
     this.audioContext = audioContext;
     this.sampleRate = audioContext.sampleRate;
 
     const mediaStreamSource = audioContext.createMediaStreamSource(stream);
     this.mediaStreamSource = mediaStreamSource;
 
-    // Create ScriptProcessor for raw audio access
-    // BufferSize: 4096 samples (good balance of latency vs. CPU)
-    const processor = audioContext.createScriptProcessor(4096, 1, 1);
-    this.processor = processor;
+    if (!audioContext.audioWorklet) {
+      throw new Error('AudioWorklet is not supported in this environment');
+    }
 
-    processor.onaudioprocess = (event: AudioProcessingEvent) => {
-      if (this.isRecording) {
-        const audioData = event.inputBuffer.getChannelData(0);
-        // Store a copy of the audio data
-        this.audioData.push(new Float32Array(audioData));
-      }
+    const workletUrl = AudioContextRecorder.createRecorderWorkletUrl();
+    this.workletUrl = workletUrl;
+    await audioContext.audioWorklet.addModule(workletUrl);
+
+    const workletNode = new AudioWorkletNode(audioContext, 'recorder-processor');
+    this.workletNode = workletNode;
+
+    workletNode.port.onmessage = (event: MessageEvent<Float32Array>) => {
+      if (!this.isRecording) return;
+      this.audioData.push(event.data);
     };
 
-    mediaStreamSource.connect(processor);
-    processor.connect(audioContext.destination);
+    mediaStreamSource.connect(workletNode);
+    workletNode.connect(audioContext.destination);
   }
 
   /**
@@ -182,8 +196,9 @@ class AudioContextRecorder {
    * Cleanup audio context
    */
   cleanup(): void {
-    if (this.processor) {
-      this.processor.disconnect();
+    if (this.workletNode) {
+      this.workletNode.port.onmessage = null;
+      this.workletNode.disconnect();
     }
     if (this.mediaStreamSource) {
       this.mediaStreamSource.disconnect();
@@ -191,6 +206,29 @@ class AudioContextRecorder {
     if (this.audioContext && this.audioContext.state !== 'closed') {
       this.audioContext.close();
     }
+    if (this.workletUrl) {
+      URL.revokeObjectURL(this.workletUrl);
+      this.workletUrl = null;
+    }
+  }
+
+  private static createRecorderWorkletUrl(): string {
+    const workletCode = `
+class RecorderProcessor extends AudioWorkletProcessor {
+  process(inputs) {
+    const input = inputs[0];
+    if (input && input[0]) {
+      // Copy the channel buffer to detach from the audio graph memory
+      this.port.postMessage(input[0].slice(0));
+    }
+    return true;
+  }
+}
+registerProcessor('recorder-processor', RecorderProcessor);
+    `.trim();
+
+    const blob = new Blob([workletCode], { type: 'application/javascript' });
+    return URL.createObjectURL(blob);
   }
 }
 
@@ -313,7 +351,11 @@ async function webmToWav(webmBlob: Blob): Promise<Blob> {
     const arrayBuffer = await webmBlob.arrayBuffer();
     console.log(`[AudioRecorder] ArrayBuffer size: ${arrayBuffer.byteLength} bytes`);
 
-    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const AudioContextCtor = window.AudioContext ?? window.webkitAudioContext;
+    if (!AudioContextCtor) {
+      throw new Error('AudioContext is not supported in this environment');
+    }
+    const audioContext = new AudioContextCtor();
     console.log(`[AudioRecorder] AudioContext sample rate: ${audioContext.sampleRate}Hz`);
 
     // Decode webm to raw PCM

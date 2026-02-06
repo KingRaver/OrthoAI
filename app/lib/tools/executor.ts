@@ -1,16 +1,13 @@
 // lib/tools/executor.ts - Fixed role type issue
-import type { ChatCompletionMessageParam, ChatCompletionToolMessageParam } from 'openai/resources/chat';
+import type {
+  ChatCompletionMessageParam,
+  ChatCompletionToolMessageParam
+} from 'openai/resources/chat';
+import type { ChatCompletionMessageFunctionToolCall } from 'openai/resources/chat/completions';
 
-type ChatCompletionMessageToolCall = {
-  id: string;
-  type: 'function';
-  function: {
-    name: string;
-    arguments: string;
-  };
-};
-
-type FunctionArguments = Record<string, any>;
+type FunctionArguments = Record<string, unknown>;
+type ToolResult = string | Record<string, unknown> | Array<unknown> | number | boolean | null;
+type ToolHandler = (args: FunctionArguments) => Promise<ToolResult>;
 
 // Map tool names to handler file names
 const toolHandlerMap: Record<string, string> = {
@@ -20,7 +17,7 @@ const toolHandlerMap: Record<string, string> = {
 };
 
 export async function executeTools(
-  toolCalls: ChatCompletionMessageToolCall[],
+  toolCalls: ChatCompletionMessageFunctionToolCall[],
   messages: ChatCompletionMessageParam[]
 ): Promise<ChatCompletionMessageParam[]> {
 
@@ -42,8 +39,8 @@ export async function executeTools(
 
       console.log(`[Tool Executor] Loading handler for ${toolName} from ./handlers/${handlerFileName}`);
 
-      const module = await import(`./handlers/${handlerFileName}`);
-      const handler = module.default as (args: FunctionArguments) => Promise<any>;
+      const handlerModule = await import(`./handlers/${handlerFileName}`);
+      const handler = handlerModule.default as ToolHandler;
 
       if (!handler) {
         throw new Error(`No default handler in ${handlerFileName}`);
@@ -53,7 +50,8 @@ export async function executeTools(
       try {
         args = JSON.parse(toolFn.arguments ?? '{}');
         console.log(`[Tool Executor] Parsed arguments for ${toolName}:`, args);
-      } catch (parseError) {
+      } catch (parseError: unknown) {
+        void parseError;
         throw new Error(`Invalid tool arguments JSON: ${toolFn.arguments}`);
       }
 

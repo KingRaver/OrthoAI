@@ -33,6 +33,14 @@ export default function TopNav({
 
             {/* Right: Control Groups */}
             <div className="flex gap-6 items-center flex-1">
+              <div className="flex items-center gap-4 text-xs font-semibold text-slate-800">
+                <Link href="/cases" className="hover:text-slate-700 transition-colors">
+                  Cases
+                </Link>
+                <Link href="/knowledge" className="hover:text-slate-700 transition-colors">
+                  Knowledge
+                </Link>
+              </div>
               {/* Right Info: Status */}
               <div className="ml-auto flex flex-col items-end text-slate-800 text-xs font-bold whitespace-nowrap">
                 <span>📊 {messageCount} messages</span>

@@ -11,6 +11,7 @@ import type { ComplexitySignals } from '../strategy/types';
 
 export type DetectionMode =
   | 'clinical-consult'
+  | 'treatment-decision'
   | 'surgical-planning'
   | 'complications-risk'
   | 'imaging-dx'
@@ -19,6 +20,7 @@ export type DetectionMode =
   | null;
 export type DetectionModeNonNull =
   | 'clinical-consult'
+  | 'treatment-decision'
   | 'surgical-planning'
   | 'complications-risk'
   | 'imaging-dx'
@@ -56,9 +58,15 @@ export interface EnhancedDetectionResult extends DetectionResult {
  */
 const MODE_PATTERNS = {
   'clinical-consult': [
-    /\b(assessment|diagnosis|plan|management|workup|treatment)\b/i,
+    /\b(assessment|diagnosis|plan|management|workup)\b/i,
     /\b(differential|ddx|recommendation|next steps)\b/i,
     /\b(pain|swelling|instability|function|symptoms)\b/i,
+  ],
+  'treatment-decision': [
+    /\b(conservative|nonoperative|non-operative|operative)\b/i,
+    /\b(surgery vs|vs surgery|or surgery|treat conservatively)\b/i,
+    /\b(should I operate|indication for surgery|surgical candidate)\b/i,
+    /\b(treatment options|management options|when to operate)\b/i,
   ],
   'surgical-planning': [
     /\b(surgical|operative|approach|technique|steps|procedure)\b/i,
@@ -245,6 +253,7 @@ export class ContextDetector {
   private static detectMode(input: string): DetectionMode {
     const scores: Record<string, number> = {
       'clinical-consult': 0,
+      'treatment-decision': 0,
       'surgical-planning': 0,
       'complications-risk': 0,
       'imaging-dx': 0,
@@ -261,7 +270,7 @@ export class ContextDetector {
     });
 
     const sorted = Object.entries(scores)
-      .filter(([_, score]) => score > 0)
+      .filter(([, score]) => score > 0)
       .sort((a, b) => b[1] - a[1]);
 
     if (sorted.length === 0) return null;
@@ -290,7 +299,7 @@ export class ContextDetector {
     });
 
     const sorted = Object.entries(scores)
-      .filter(([_, score]) => score > 0)
+      .filter(([, score]) => score > 0)
       .sort((a, b) => b[1] - a[1]);
 
     if (sorted.length === 0) return 'unknown';
@@ -381,9 +390,11 @@ export class ContextDetector {
     mode: DetectionMode,
     fileType: FileType,
     domain: Domain,
-    _input: string
+    input: string
   ): string {
     const parts: string[] = [];
+    const trimmed = input.trim();
+    const inputTag = trimmed ? `Input length: ${Math.min(trimmed.length, 10000)} chars` : 'Empty input';
 
     if (mode) {
       parts.push(`Detected ${mode} mode`);
@@ -397,6 +408,7 @@ export class ContextDetector {
       parts.push(`Primary domain: ${domain.replace('-', ' ')}`);
     }
 
+    parts.push(inputTag);
     return parts.join(' • ');
   }
 

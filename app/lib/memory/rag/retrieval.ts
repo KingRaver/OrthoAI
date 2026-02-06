@@ -1,10 +1,32 @@
 // app/lib/memory/rag/retrieval.ts
 // Chroma vector database integration for semantic search
 
-import { ChromaClient } from 'chromadb';
+import { ChromaClient, type Metadata, type Where } from 'chromadb';
 import { RetrievalResult, Message } from '../schemas';
 import { LocalEmbeddings } from './embeddings';
 import { getStorage } from '../storage';
+
+let sharedChromaClient: ChromaClient | null = null;
+
+function getChromaClient(): ChromaClient {
+  if (!sharedChromaClient) {
+    const chromaHost = process.env.CHROMA_HOST || 'localhost';
+    const chromaPort = parseInt(process.env.CHROMA_PORT || '8000', 10);
+    sharedChromaClient = new ChromaClient({ host: chromaHost, port: chromaPort });
+  }
+  return sharedChromaClient;
+}
+
+type RagContentType = NonNullable<RetrievalResult['content_type']>;
+
+type RagMetadata = Metadata & {
+  conversation_id?: string | null;
+  role?: Message['role'];
+  created_at?: string | null;
+  model_used?: string | null;
+  message_length?: number | null;
+  content_type?: RagContentType | null;
+};
 
 /**
  * Chroma Retrieval Engine
@@ -23,14 +45,7 @@ export class ChromaRetrieval {
     topK: number = 5,
     similarityThreshold: number = 0.3
   ) {
-    // Initialize Chroma client with host/port (HTTP connection)
-    const chromaHost = process.env.CHROMA_HOST || 'localhost';
-    const chromaPort = parseInt(process.env.CHROMA_PORT || '8000', 10);
-
-    this.client = new ChromaClient({
-      host: chromaHost,
-      port: chromaPort,
-    });
+    this.client = getChromaClient();
 
     this.collectionName = collectionName;
     this.embeddings = embeddingModel;
@@ -196,7 +211,7 @@ export class ChromaRetrieval {
   async search(
     query: string,
     topK?: number,
-    filters?: Record<string, any>
+    filters?: Where
   ): Promise<RetrievalResult[]> {
     try {
       const k = topK || this.topK;
@@ -212,11 +227,11 @@ export class ChromaRetrieval {
       });
 
       // Query collection
-      const results = await collection.query({
+      const results = await collection.query<RagMetadata>({
         queryEmbeddings: [queryEmbedding],
         nResults: k,
         where: filters, // Optional metadata filtering
-        include: ['embeddings', 'distances', 'documents', 'metadatas'],
+        include: ['distances', 'documents', 'metadatas'],
       });
 
       const responseTime = Date.now() - startTime;
@@ -238,50 +253,64 @@ export class ChromaRetrieval {
       }
 
       const retrievalResults: RetrievalResult[] = [];
+      const entries = results.ids[0].map((messageId, idx) => {
+        const metadata: RagMetadata = results.metadatas?.[0]?.[idx] ?? {};
+        return {
+          messageId,
+          distance: results.distances?.[0]?.[idx] ?? 0,
+          document: results.documents?.[0]?.[idx] ?? '',
+          metadata,
+        };
+      });
 
-      for (let i = 0; i < results.ids[0].length; i++) {
-        const messageId = results.ids[0][i];
-        const distance = results.distances?.[0]?.[i] || 0;
-        const document = results.documents?.[0]?.[i] || '';
-        const metadata = results.metadatas?.[0]?.[i] as any || {};
-        const contentType = metadata.content_type || 'message';
+      const messageIds = entries
+        .filter(entry => (entry.metadata.content_type ?? 'message') === 'message')
+        .map(entry => entry.messageId);
+      const messagesById = new Map(
+        storage.getMessagesByIds(messageIds).map(msg => [msg.id, msg])
+      );
 
-        // Chroma uses distance (lower is better), convert to similarity (0-1)
-        // For cosine: similarity = 1 - distance
-        const similarity = Math.max(0, 1 - distance);
+      for (const entry of entries) {
+        const contentType: RagContentType = entry.metadata.content_type ?? 'message';
+        const similarity = Math.max(0, 1 - entry.distance);
 
-        // Filter by threshold
         if (similarity < this.similarityThreshold) {
           continue;
         }
 
+        const conversationId =
+          typeof entry.metadata.conversation_id === 'string'
+            ? entry.metadata.conversation_id
+            : undefined;
+        const createdAt =
+          typeof entry.metadata.created_at === 'string'
+            ? entry.metadata.created_at
+            : undefined;
+
         if (contentType !== 'message') {
           const syntheticMessage: Message = {
-            id: messageId,
-            conversation_id: metadata.conversation_id || 'profile',
+            id: entry.messageId,
+            conversation_id: conversationId ?? 'profile',
             role: 'system',
-            content: document,
-            created_at: metadata.created_at || new Date().toISOString(),
+            content: entry.document,
+            created_at: createdAt ?? new Date().toISOString(),
           };
 
           retrievalResults.push({
             message: syntheticMessage,
             similarity_score: similarity,
-            conversation_summary: metadata.conversation_id,
+            conversation_summary: conversationId,
             content_type: contentType,
           });
           continue;
         }
 
-        // Fetch full message from database
-        const storage = getStorage();
-        const fullMessage = storage.getMessage(messageId);
-
+        const fullMessage = messagesById.get(entry.messageId);
         if (fullMessage) {
           retrievalResults.push({
             message: fullMessage,
             similarity_score: similarity,
-            conversation_summary: metadata.conversation_id,
+            conversation_summary: conversationId,
             content_type: 'message',
           });
         }
@@ -308,11 +337,11 @@ export class ChromaRetrieval {
       conversation_id?: string;
       role?: 'user' | 'assistant';
       dateRange?: { from: Date; to: Date };
-      content_type?: 'message' | 'conversation_summary' | 'user_profile';
+      content_type?: 'message' | 'conversation_summary' | 'user_profile' | 'knowledge_chunk';
     },
     topK?: number
   ): Promise<RetrievalResult[]> {
-    const conditions: Record<string, any>[] = [];
+    const conditions: Where[] = [];
 
     if (filters.conversation_id) {
       conditions.push({ conversation_id: { $eq: filters.conversation_id } });
@@ -327,7 +356,7 @@ export class ChromaRetrieval {
     }
 
     // Build ChromaDB-compatible where clause
-    let chromaFilters: Record<string, any> | undefined = undefined;
+    let chromaFilters: Where | undefined = undefined;
     if (conditions.length === 1) {
       // Single condition: use it directly
       chromaFilters = conditions[0];
@@ -348,7 +377,7 @@ export class ChromaRetrieval {
   async upsertDocumentEmbedding(
     id: string,
     content: string,
-    metadata: Record<string, any>
+    metadata: RagMetadata
   ): Promise<void> {
     try {
       const embedding = await this.embeddings.embed(content);
@@ -488,12 +517,14 @@ export class ChromaRetrieval {
       const db = storage.getDatabase();
 
       // Build FTS query - escape special characters
-      const ftsQuery = query
-        .replace(/[^\w\s]/g, ' ')  // Remove special chars
-        .trim()
-        .split(/\s+/)               // Split on whitespace
-        .filter(term => term.length > 2)  // Filter short terms
-        .join(' OR ');              // Join with OR for broader matching
+      const normalized = query.replace(/[_]+/g, ' ');
+      const tokens = normalized.match(/[A-Za-z0-9]{2,}/g) || [];
+      const uniqueTokens = Array.from(
+        new Set(tokens.map(term => term.trim()).filter(Boolean))
+      );
+      const ftsQuery = uniqueTokens
+        .map(term => term.replace(/"/g, '""'))
+        .join(' OR ');
 
       if (!ftsQuery) {
         console.log('[ChromaRetrieval] FTS query too short, returning empty results');
@@ -507,12 +538,12 @@ export class ChromaRetrieval {
           f.conversation_id,
           f.content,
           f.role,
-          bm25(f) as bm25_score
+          bm25(messages_fts) as bm25_score
         FROM messages_fts f
         WHERE f.content MATCH ?
       `;
 
-      const params: any[] = [ftsQuery];
+      const params: Array<string | number> = [ftsQuery];
 
       // Filter by conversation if provided
       if (conversationId) {
@@ -537,25 +568,26 @@ export class ChromaRetrieval {
 
       // Transform to RetrievalResult format
       const results: RetrievalResult[] = [];
+      const messageIds = rows.map(row => row.message_id);
+      const messagesById = new Map(
+        storage.getMessagesByIds(messageIds).map(msg => [msg.id, msg])
+      );
 
       for (const row of rows) {
-        // Fetch full message from database
-        const fullMessage = storage.getMessage(row.message_id);
+        const fullMessage = messagesById.get(row.message_id);
+        if (!fullMessage) continue;
 
-        if (fullMessage) {
-          // Normalize BM25 score to 0-1 range (FTS5 bm25: lower is better)
-          const normalizedScore = row.bm25_score <= 0
-            ? 1
-            : 1 / (1 + row.bm25_score);
+        const normalizedScore = row.bm25_score <= 0
+          ? 1
+          : 1 / (1 + row.bm25_score);
 
-          results.push({
-            message: fullMessage,
-            similarity_score: normalizedScore,
-            conversation_summary: row.conversation_id,
-            content_type: 'message',
-            fts_score: row.bm25_score,  // Keep raw score for debugging
-          });
-        }
+        results.push({
+          message: fullMessage,
+          similarity_score: normalizedScore,
+          conversation_summary: row.conversation_id,
+          content_type: 'message',
+          fts_score: row.bm25_score,  // Keep raw score for debugging
+        });
       }
 
       console.log(

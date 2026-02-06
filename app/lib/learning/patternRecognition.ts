@@ -6,6 +6,7 @@
 import sqlite3 from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
+import { createHash } from 'crypto';
 
 const DB_PATH = path.join(process.cwd(), '.data', 'learning_patterns.db');
 
@@ -28,8 +29,37 @@ export interface ThemeDetectionResult {
   reasoning: string;
 }
 
+const parseKeywords = (value: string): string[] => {
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : [];
+  } catch {
+    return [];
+  }
+};
+
+type DbConversationPatternRow = {
+  id: string;
+  theme: string;
+  keywords: string;
+  complexity: number | null;
+  successful_model: string | null;
+  avg_quality: number | null;
+  occurrences: number | null;
+  last_seen: string;
+  created_at: string;
+};
+
+type DbThemeAnalyticsRow = {
+  theme: string;
+  total_occurrences: number | null;
+  avg_quality: number | null;
+  successful_model: string | null;
+};
+
 export class PatternRecognizer {
   private db!: sqlite3.Database;
+  private themeCache = new Map<string, { result: ThemeDetectionResult; messageHash: string; timestamp: number }>();
 
   // Common themes in orthopedic clinical practice
   private themePatterns = {
@@ -105,7 +135,15 @@ export class PatternRecognizer {
   /**
    * Detect the primary theme of a user message
    */
-  async detectTheme(userMessage: string): Promise<ThemeDetectionResult> {
+  async detectTheme(userMessage: string, conversationId?: string): Promise<ThemeDetectionResult> {
+    if (conversationId) {
+      const messageHash = createHash('md5').update(userMessage).digest('hex');
+      const cached = this.themeCache.get(conversationId);
+      if (cached && cached.messageHash === messageHash && Date.now() - cached.timestamp < 30000) {
+        return cached.result;
+      }
+    }
+
     const messageLower = userMessage.toLowerCase();
 
     const themeScores: { [theme: string]: number } = {};
@@ -138,7 +176,7 @@ export class PatternRecognizer {
     const suggestedModel = this.suggestModelForTheme(primaryTheme, historicalData);
     const suggestedTemperature = this.suggestTemperatureForTheme(primaryTheme);
 
-    return {
+    const result = {
       primaryTheme,
       confidence,
       suggestedModel,
@@ -149,6 +187,17 @@ export class PatternRecognizer {
           : 'No historical data'
       }`
     };
+
+    if (conversationId) {
+      const messageHash = createHash('md5').update(userMessage).digest('hex');
+      this.themeCache.set(conversationId, {
+        result,
+        messageHash,
+        timestamp: Date.now()
+      });
+    }
+
+    return result;
   }
 
   private async getThemeHistory(theme: string): Promise<ConversationPattern> {
@@ -156,17 +205,17 @@ export class PatternRecognizer {
       SELECT * FROM conversation_patterns WHERE theme = ? ORDER BY last_seen DESC LIMIT 1
     `);
 
-    const row = stmt.get(theme) as any;
+    const row = stmt.get(theme) as DbConversationPatternRow | undefined;
 
     if (row) {
       return {
         id: row.id,
         theme: row.theme,
-        keywords: JSON.parse(row.keywords),
-        complexity: row.complexity,
-        successfulModel: row.successful_model,
-        avgQuality: row.avg_quality,
-        occurrences: row.occurrences,
+        keywords: parseKeywords(row.keywords),
+        complexity: row.complexity ?? 50,
+        successfulModel: row.successful_model ?? 'biomistral-7b-instruct',
+        avgQuality: row.avg_quality ?? 0.8,
+        occurrences: row.occurrences ?? 0,
         lastSeen: new Date(row.last_seen)
       };
     }
@@ -291,13 +340,13 @@ export class PatternRecognizer {
       ORDER BY total_occurrences DESC
     `);
 
-    const rows = stmt.all() as any[];
+    const rows = stmt.all() as DbThemeAnalyticsRow[];
 
     return rows.map(row => ({
       theme: row.theme,
-      occurrences: row.total_occurrences,
-      avgQuality: row.avg_quality,
-      topModel: row.successful_model
+      occurrences: row.total_occurrences ?? 0,
+      avgQuality: row.avg_quality ?? 0.8,
+      topModel: row.successful_model ?? 'biomistral-7b-instruct'
     }));
   }
 

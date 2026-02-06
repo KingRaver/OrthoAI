@@ -15,6 +15,7 @@ export interface Message {
   tool_results?: ToolResult[];
   model_used?: string;
   temperature?: number;
+  code_identifiers?: string[];
 }
 
 /**
@@ -115,7 +116,7 @@ export interface RetrievalResult {
   message: Message;
   similarity_score: number;
   conversation_summary?: string;
-  content_type?: 'message' | 'conversation_summary' | 'user_profile';
+  content_type?: 'message' | 'conversation_summary' | 'user_profile' | 'knowledge_chunk';
   fts_score?: number;  // Phase 3: BM25 score from FTS search
 }
 

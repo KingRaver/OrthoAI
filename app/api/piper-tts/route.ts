@@ -5,9 +5,31 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 
+const DEBUG_METRICS = process.env.DEBUG_METRICS === 'true';
+
 interface PiperTTSRequest {
   text: string;
   voice?: string; // e.g., 'en_US-libritts-high'
+}
+
+type PiperAvailability = { ok: true } | { ok: false; error: string };
+const piperAvailabilityCache = new Map<string, PiperAvailability>();
+
+function checkPiperAvailability(command: string): PiperAvailability {
+  const cached = piperAvailabilityCache.get(command);
+  if (cached) return cached;
+
+  try {
+    execSync(command, { stdio: 'pipe', timeout: 10000 });
+    const ok: PiperAvailability = { ok: true };
+    piperAvailabilityCache.set(command, ok);
+    return ok;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    const fail: PiperAvailability = { ok: false, error: message };
+    piperAvailabilityCache.set(command, fail);
+    return fail;
+  }
 }
 
 /**
@@ -16,6 +38,11 @@ interface PiperTTSRequest {
  */
 export async function GET(req: NextRequest) {
   try {
+    const searchParams = req.nextUrl.searchParams;
+    const query = searchParams.get('q')?.toLowerCase().trim() || '';
+    const limitParam = searchParams.get('limit');
+    const limit = limitParam ? Math.max(0, parseInt(limitParam, 10)) : null;
+
     const voiceDir = path.join(os.homedir(), '.piper', 'models');
 
     // Check if voice directory exists
@@ -32,9 +59,17 @@ export async function GET(req: NextRequest) {
 
     // List all .onnx files (voice models)
     const files = fs.readdirSync(voiceDir);
-    const voices = files
+    let voices = files
       .filter(f => f.endsWith('.onnx'))
       .map(f => f.replace('.onnx', ''));
+
+    if (query) {
+      voices = voices.filter(v => v.toLowerCase().includes(query));
+    }
+
+    if (limit !== null) {
+      voices = voices.slice(0, limit);
+    }
 
     return NextResponse.json({
       success: true,
@@ -61,6 +96,7 @@ export async function GET(req: NextRequest) {
  */
 export async function POST(req: NextRequest): Promise<NextResponse> {
   let tempOutputFile: string | null = null;
+  const requestStart = Date.now();
 
   try {
     const { text, voice = 'en_US-libritts-high' } = await req.json() as PiperTTSRequest;
@@ -118,6 +154,19 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         // Add length_scale for faster speech and sentence_silence for snappier output
         const pythonCmd = process.env.PIPER_PYTHON_CMD || 'python3';
         const useArch = process.platform === 'darwin' && process.env.PIPER_FORCE_ARM64 !== 'false';
+        const availabilityCommand = useArch
+          ? `arch -arm64 ${pythonCmd} -m piper --help`
+          : `${pythonCmd} -m piper --help`;
+        const availability = checkPiperAvailability(availabilityCommand);
+        if (!availability.ok) {
+          resolve(
+            NextResponse.json(
+              { error: `Piper is not available: ${availability.error}` },
+              { status: 500 }
+            )
+          );
+          return;
+        }
         const piperArgs = [
           '-m',
           'piper',
@@ -158,6 +207,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           console.log(`[Piper] Process exited with code ${code}`);
           console.log(`[Piper] stdout: ${stdoutOutput || '(empty)'}`);
           console.log(`[Piper] stderr: ${stderrOutput || '(empty)'}`);
+          if (DEBUG_METRICS) {
+            console.log(`[Metrics] TTS duration: ${Date.now() - requestStart}ms`);
+          }
 
           if (code !== 0) {
             console.error('[Piper] Process failed with code:', code);
@@ -259,7 +311,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       try {
         fs.unlinkSync(tempOutputFile);
       } catch (e) {
-        // Ignore cleanup errors
+        if (DEBUG_METRICS) {
+          const message = e instanceof Error ? e.message : 'Unknown error';
+          console.warn('[Piper] Temp file cleanup failed:', message);
+        }
       }
     }
 

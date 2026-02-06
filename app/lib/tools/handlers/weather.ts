@@ -1,5 +1,9 @@
 // lib/tools/handlers/weather.ts - OpenWeatherMap integration
-type FunctionArguments = Record<string, any>;
+type FunctionArguments = Record<string, unknown>;
+type WeatherArgs = { city: string };
+
+const isWeatherArgs = (args: FunctionArguments): args is WeatherArgs =>
+  typeof args.city === 'string' && args.city.trim().length > 0;
 
 interface OpenWeatherResponse {
   main: {
@@ -18,7 +22,11 @@ interface OpenWeatherResponse {
 }
 
 export default async function get_weather(args: FunctionArguments) {
-  const { city } = args as { city: string };
+  if (!isWeatherArgs(args)) {
+    throw new Error('Invalid arguments: city is required');
+  }
+
+  const { city } = args;
 
   const apiKey = process.env.OPENWEATHER_API_KEY;
 
@@ -46,7 +54,7 @@ export default async function get_weather(args: FunctionArguments) {
     const data = (await response.json()) as OpenWeatherResponse;
 
     return `${data.weather[0].description} ${Math.round(data.main.temp)} degrees feeling like ${Math.round(data.main.feels_like)} degrees humidity ${data.main.humidity} percent wind speed ${data.wind.speed} m/s`;
-  } catch (error) {
+  } catch (error: unknown) {
     console.error('[Weather Tool] Error fetching weather data:', error);
     throw error;
   }

@@ -24,6 +24,20 @@ interface VoiceOutputState {
   progress: number; // 0-1
 }
 
+declare global {
+  interface Window {
+    webkitAudioContext?: typeof AudioContext;
+  }
+}
+
+const DEBUG_VOICE = process.env.NEXT_PUBLIC_DEBUG_VOICE === 'true';
+const voiceLog = (...args: unknown[]) => {
+  if (DEBUG_VOICE) console.log(...args);
+};
+const voiceWarn = (...args: unknown[]) => {
+  if (DEBUG_VOICE) console.warn(...args);
+};
+
 export function useVoiceOutput(options: UseVoiceOutputOptions = {}) {
   const {
     onFrequencyAnalysis,
@@ -45,6 +59,7 @@ export function useVoiceOutput(options: UseVoiceOutputOptions = {}) {
   const sourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
   const previousAmplitudeRef = useRef<number>(0);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const initializedRef = useRef(false);
 
   // Store callbacks in refs to avoid re-initialization
   const onFrequencyAnalysisRef = useRef(onFrequencyAnalysis);
@@ -58,23 +73,24 @@ export function useVoiceOutput(options: UseVoiceOutputOptions = {}) {
     onErrorRef.current = onError;
   }, [onFrequencyAnalysis, onPlaybackEnd, onError]);
 
-  // Initialize audio context and analyzer (once)
-  useEffect(() => {
-    try {
-      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-      audioContextRef.current = audioContext;
-      console.log('[VoiceOutput] AudioContext initialized - state:', audioContext.state);
+  const ensureAudioInitialized = useCallback(() => {
+    if (initializedRef.current) return;
 
-      // Create hidden audio element for playback
+    try {
+      const AudioContextCtor = window.AudioContext ?? window.webkitAudioContext;
+      if (!AudioContextCtor) {
+        throw new Error('AudioContext is not supported in this environment');
+      }
+      const audioContext = new AudioContextCtor();
+      audioContextRef.current = audioContext;
+
       const audioElement = new Audio();
       audioElement.crossOrigin = 'anonymous';
       audioElementRef.current = audioElement;
 
-      // Create media source from audio element
       const sourceNode = audioContext.createMediaElementSource(audioElement);
       sourceNodeRef.current = sourceNode;
 
-      // Initialize frequency analyzer with the same audio context
       const analyzer = new AudioAnalyzer((frequencyData) => {
         const beat = extractBeatFromFrequency(
           frequencyData.frequency,
@@ -91,12 +107,10 @@ export function useVoiceOutput(options: UseVoiceOutputOptions = {}) {
         });
       }, audioContext);
 
-      // Connect the audio graph: source -> analyzer -> destination
       sourceNode.connect(analyzer.getAnalyser());
       analyzer.getAnalyser().connect(audioContext.destination);
       analyzerRef.current = analyzer;
 
-      // Setup playback event listeners
       audioElement.onplay = () => {
         setState(prev => ({ ...prev, isPlaying: true }));
         analyzer.start();
@@ -124,12 +138,8 @@ export function useVoiceOutput(options: UseVoiceOutputOptions = {}) {
         }
       };
 
-      return () => {
-        analyzer.dispose();
-        if (audioContext.state !== 'closed') {
-          audioContext.close();
-        }
-      };
+      initializedRef.current = true;
+      voiceLog('[VoiceOutput] AudioContext initialized - state:', audioContext.state);
     } catch (error: unknown) {
       const errorMsg = error instanceof Error ? error.message : 'Audio context failed';
       setState(prev => ({ ...prev, error: errorMsg }));
@@ -144,12 +154,14 @@ export function useVoiceOutput(options: UseVoiceOutputOptions = {}) {
     async (text: string): Promise<void> => {
       return new Promise((resolve, reject) => {
         if (!text.trim()) {
-          console.log('[VoiceOutput] Empty text, skipping speech');
+          voiceLog('[VoiceOutput] Empty text, skipping speech');
           resolve();
           return;
         }
 
-        console.log(`[VoiceOutput] Starting TTS for text (${text.length} chars): "${text.substring(0, 50)}..."`);
+        ensureAudioInitialized();
+
+        voiceLog(`[VoiceOutput] Starting TTS for text (${text.length} chars): "${text.substring(0, 50)}..."`);
 
         // Cancel any previous request
         if (abortControllerRef.current) {
@@ -166,7 +178,7 @@ export function useVoiceOutput(options: UseVoiceOutputOptions = {}) {
               progress: 0
             }));
 
-            console.log('[VoiceOutput] Calling Piper TTS API...');
+            voiceLog('[VoiceOutput] Calling Piper TTS API...');
 
             // Call Piper TTS API endpoint
             const response = await fetch('/api/piper-tts', {
@@ -176,7 +188,7 @@ export function useVoiceOutput(options: UseVoiceOutputOptions = {}) {
               signal: abortControllerRef.current?.signal
             });
 
-            console.log(`[VoiceOutput] TTS API response: ${response.status} ${response.statusText}`);
+            voiceLog(`[VoiceOutput] TTS API response: ${response.status} ${response.statusText}`);
 
             if (!response.ok) {
               const errorData = await response.json().catch(() => ({}));
@@ -185,7 +197,7 @@ export function useVoiceOutput(options: UseVoiceOutputOptions = {}) {
 
             // Get audio blob
             const audioBlob = await response.blob();
-            console.log(`[VoiceOutput] Received audio blob: ${audioBlob.size} bytes, type: ${audioBlob.type}`);
+            voiceLog(`[VoiceOutput] Received audio blob: ${audioBlob.size} bytes, type: ${audioBlob.type}`);
 
             if (audioBlob.size === 0) {
               throw new Error('Empty audio response from Piper TTS');
@@ -193,7 +205,7 @@ export function useVoiceOutput(options: UseVoiceOutputOptions = {}) {
 
             // Create blob URL and play
             const audioUrl = URL.createObjectURL(audioBlob);
-            console.log('[VoiceOutput] Created audio URL, preparing to play...');
+            voiceLog('[VoiceOutput] Created audio URL, preparing to play...');
 
             if (!audioElementRef.current) {
               throw new Error('Audio element not initialized');
@@ -204,12 +216,12 @@ export function useVoiceOutput(options: UseVoiceOutputOptions = {}) {
 
             // Resume AudioContext if it was suspended (browser autoplay restriction)
             if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
-              console.log('[VoiceOutput] AudioContext suspended - resuming...');
+              voiceLog('[VoiceOutput] AudioContext suspended - resuming...');
               await audioContextRef.current.resume();
-              console.log('[VoiceOutput] AudioContext state:', audioContextRef.current.state);
+              voiceLog('[VoiceOutput] AudioContext state:', audioContextRef.current.state);
             }
 
-            console.log('[VoiceOutput] Starting audio playback...');
+            voiceLog('[VoiceOutput] Starting audio playback...');
 
             // Play audio
             const playPromise = audioElement.play();
@@ -217,7 +229,7 @@ export function useVoiceOutput(options: UseVoiceOutputOptions = {}) {
             if (playPromise !== undefined) {
               playPromise
                 .then(() => {
-                  console.log('[VoiceOutput] Audio playback started successfully');
+                  voiceLog('[VoiceOutput] Audio playback started successfully');
                   setState(prev => ({
                     ...prev,
                     isGenerating: false
@@ -231,7 +243,7 @@ export function useVoiceOutput(options: UseVoiceOutputOptions = {}) {
                   }
                 });
             } else {
-              console.warn('[VoiceOutput] play() did not return a promise');
+              voiceWarn('[VoiceOutput] play() did not return a promise');
             }
 
             // Wait for audio to finish
@@ -275,7 +287,7 @@ export function useVoiceOutput(options: UseVoiceOutputOptions = {}) {
         })();
       });
     },
-    [voice]
+    [voice, ensureAudioInitialized]
   );
 
   /**
@@ -325,6 +337,9 @@ export function useVoiceOutput(options: UseVoiceOutputOptions = {}) {
       }
       if (analyzerRef.current) {
         analyzerRef.current.dispose();
+      }
+      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+        audioContextRef.current.close();
       }
     };
   }, []);

@@ -87,7 +87,7 @@ export default function RootLayout({
         `}</style>
       </head>
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased overflow-x-hidden overflow-y-auto bg-gradient-to-br from-slate-50 via-cyan-50/30 to-slate-50`}
+        className={`${geistSans.variable} ${geistMono.variable} antialiased overflow-x-hidden overflow-y-auto bg-linear-to-br from-slate-50 via-cyan-50/30 to-slate-50`}
         suppressHydrationWarning
       >
         {children}

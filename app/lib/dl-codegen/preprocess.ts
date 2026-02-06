@@ -68,13 +68,21 @@ function extractKeywords(tokens: string[]): Float32Array {
 
   // Convert to feature vector (top 100)
   const entries = Array.from(freq.entries()).sort((a, b) => b[1] - a[1]);
-  entries.slice(0, 100).forEach(([_, count], i) => {
+  entries.slice(0, 100).forEach(([, count], i) => {
     vector[i] = count / tokens.length; // Normalized frequency
   });
 
   return vector;
+  
 }
 
+  /**
+   * Parse code and extract simplified AST features:
+   * - Function/class definitions
+   * - Nesting depth (brace count)
+   * - Import statements
+   * Returns a 50-dimensional Float32Array with normalized feature values.
+   */
 function parseASTFeatures(code: string): Float32Array {
   // Simplified AST: function/class counts, nesting depth, etc.
   const features = new Float32Array(50).fill(0);

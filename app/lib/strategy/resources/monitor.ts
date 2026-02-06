@@ -26,7 +26,10 @@ export async function getSystemResources(): Promise<SystemResourceInfo> {
 
   // Use full free RAM plus headroom - let the machine cook!
   // System can handle swap/virtual memory, so report generously
-  const availableRAM = disableConstraints ? freeRAM * 2.0 : freeRAM * 1.2; // Allow swap/virtual memory usage
+  const availableRAM = Math.min(
+    totalRAM,
+    disableConstraints ? freeRAM * 2.0 : freeRAM * 1.2 // Allow swap/virtual memory usage
+  );
 
   // CPU info
   const cpus = os.cpus();

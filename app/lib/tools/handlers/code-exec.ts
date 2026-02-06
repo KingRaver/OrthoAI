@@ -1,9 +1,21 @@
 // lib/tools/handlers/code-exec.ts - Secure Python/JavaScript Executor
 // Uses Pyodide (WebAssembly) for Python and isolated-vm for JavaScript
-type FunctionArguments = Record<string, any>;
+type FunctionArguments = Record<string, unknown>;
+type CodeExecArgs = { code: string; language?: string };
+type CodeExecResult = { code: string; language: string; output: string | null; error: string | null };
+
+type PyodideLike = {
+  runPythonAsync(code: string): Promise<unknown>;
+};
+
+const toText = (value: unknown): string => {
+  if (typeof value === 'string') return value;
+  if (value === null || value === undefined) return '';
+  return String(value);
+};
 
 // Lazy-loaded Pyodide instance for Python execution
-let pyodideInstance: any = null;
+let pyodideInstance: PyodideLike | null = null;
 
 async function loadPyodide() {
   if (pyodideInstance) return pyodideInstance;
@@ -11,9 +23,9 @@ async function loadPyodide() {
   try {
     // Dynamic import to avoid bundling issues
     const { loadPyodide: load } = await import('pyodide');
-    pyodideInstance = await load({
+    pyodideInstance = (await load({
       indexURL: 'https://cdn.jsdelivr.net/pyodide/v0.24.1/full/',
-    });
+    })) as PyodideLike;
     console.log('[CodeExec] Pyodide loaded successfully');
     return pyodideInstance;
   } catch (error) {
@@ -35,22 +47,24 @@ sys.stderr = StringIO()
     `);
 
     // Execute user code
-    let result;
+    let result: unknown;
     try {
       result = await pyodide.runPythonAsync(code);
     } catch (execError) {
       const stderr = await pyodide.runPythonAsync('sys.stderr.getvalue()');
+      const stderrText = toText(stderr);
       return {
         output: '',
-        error: stderr || (execError instanceof Error ? execError.message : String(execError)),
+        error: stderrText || (execError instanceof Error ? execError.message : String(execError)),
       };
     }
 
     // Get captured output
     const stdout = await pyodide.runPythonAsync('sys.stdout.getvalue()');
+    const stdoutText = toText(stdout);
 
     return {
-      output: stdout || (result !== undefined ? String(result) : 'Executed successfully'),
+      output: stdoutText || (result !== undefined ? String(result) : 'Executed successfully'),
       error: null,
     };
   } catch (error) {
@@ -70,7 +84,7 @@ async function executeJavaScript(code: string): Promise<{ output: string; error:
     // Create isolated context with limited globals
     const sandbox = {
       console: {
-        log: (...args: any[]) => capturedOutput.push(util.inspect(args, { depth: 2 })),
+        log: (...args: unknown[]) => capturedOutput.push(util.inspect(args, { depth: 2 })),
       },
       setTimeout: undefined,
       setInterval: undefined,
@@ -106,8 +120,21 @@ async function executeJavaScript(code: string): Promise<{ output: string; error:
   }
 }
 
-export default async function code_exec(args: FunctionArguments) {
-  const { code, language = 'python' } = args as { code: string; language?: string };
+const isCodeExecArgs = (args: FunctionArguments): args is CodeExecArgs =>
+  typeof args.code === 'string' &&
+  (args.language === undefined || typeof args.language === 'string');
+
+export default async function code_exec(args: FunctionArguments): Promise<CodeExecResult> {
+  if (!isCodeExecArgs(args)) {
+    return {
+      code: '',
+      language: 'python',
+      output: null,
+      error: 'Invalid arguments: code is required',
+    };
+  }
+
+  const { code, language = 'python' } = args;
 
   if (process.env.ENABLE_CODE_EXEC !== 'true') {
     return {
@@ -122,6 +149,7 @@ export default async function code_exec(args: FunctionArguments) {
   if (code.length > 10000) {
     return {
       code,
+      language,
       output: null,
       error: 'Code too long (max 10,000 characters)',
     };

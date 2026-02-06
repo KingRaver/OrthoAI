@@ -11,7 +11,7 @@ import { getEmbeddingModel, getEmbeddingUrl } from '@/app/lib/llm/config';
  */
 export class LocalEmbeddings {
   private embeddingModel: string;
-  private cache: Map<string, number[]> = new Map();
+  private cache: Map<string, { value: number[]; lastAccessed: number }> = new Map();
   private maxCacheSize: number;
 
   constructor(
@@ -29,9 +29,10 @@ export class LocalEmbeddings {
     const cacheKey = this.getCacheKey(text);
     if (this.cache.has(cacheKey)) {
       const cached = this.cache.get(cacheKey)!;
+      cached.lastAccessed = Date.now();
       this.cache.delete(cacheKey);
       this.cache.set(cacheKey, cached);
-      return cached;
+      return cached.value;
     }
 
     try {
@@ -158,10 +159,17 @@ export class LocalEmbeddings {
 
   private addToCache(key: string, value: number[]): void {
     if (this.cache.size >= this.maxCacheSize) {
-      const firstKey = this.cache.keys().next().value;
-      if (firstKey) this.cache.delete(firstKey);
+      let oldestKey: string | undefined;
+      let oldestTime = Infinity;
+      for (const [entryKey, entryValue] of this.cache.entries()) {
+        if (entryValue.lastAccessed < oldestTime) {
+          oldestTime = entryValue.lastAccessed;
+          oldestKey = entryKey;
+        }
+      }
+      if (oldestKey) this.cache.delete(oldestKey);
     }
-    this.cache.set(key, value);
+    this.cache.set(key, { value, lastAccessed: Date.now() });
   }
 
   private getCacheKey(text: string): string {
@@ -188,9 +196,13 @@ export function getSharedEmbeddings(
   maxCacheSize?: number
 ): LocalEmbeddings {
   if (!sharedEmbeddingsInstance) {
+    const envCacheSize = parseInt(process.env.EMBEDDING_CACHE_SIZE || '1000', 10);
+    const resolvedCacheSize = Number.isFinite(envCacheSize) && envCacheSize > 0
+      ? envCacheSize
+      : 1000;
     sharedEmbeddingsInstance = new LocalEmbeddings(
       embeddingModel,
-      maxCacheSize
+      maxCacheSize || resolvedCacheSize
     );
   }
   return sharedEmbeddingsInstance;

@@ -58,11 +58,13 @@ export function extractCodeIdentifiers(text: string): Set<string> {
  */
 function calculateCodeMatch(
   queryIdentifiers: Set<string>,
-  resultContent: string
+  resultMessage: { content: string; code_identifiers?: string[] }
 ): number {
   if (queryIdentifiers.size === 0) return 0;
 
-  const resultIdentifiers = extractCodeIdentifiers(resultContent);
+  const resultIdentifiers = resultMessage.code_identifiers && resultMessage.code_identifiers.length > 0
+    ? new Set(resultMessage.code_identifiers.map(i => i.toLowerCase()))
+    : extractCodeIdentifiers(resultMessage.content);
 
   // Check if any query identifier is in result
   for (const identifier of queryIdentifiers) {
@@ -101,7 +103,7 @@ function calculateFinalScore(
   const bm25Norm = result.fts_score ? normalizeBM25(result.fts_score) : 0;
 
   // Code identifier match (0 or 1)
-  const codeMatch = calculateCodeMatch(queryIdentifiers, result.message.content);
+  const codeMatch = calculateCodeMatch(queryIdentifiers, result.message);
 
   // Weighted combination
   const finalScore = alpha * denseSim + beta * bm25Norm + gamma * codeMatch;
@@ -158,8 +160,11 @@ export function deduplicateAndRerank(
   // Sort by final score (descending)
   reranked.sort((a, b) => (b.final_score || 0) - (a.final_score || 0));
 
-  // Remove final_score from output (keep as internal calculation)
-  return reranked.map(({ final_score, ...result }) => result);
+  // Apply final score as the new similarity score and omit the internal field
+  return reranked.map(({ final_score, similarity_score, ...result }) => ({
+    ...result,
+    similarity_score: final_score ?? similarity_score
+  }));
 }
 
 /**

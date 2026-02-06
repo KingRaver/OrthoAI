@@ -4,6 +4,28 @@ import sqlite3 from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
 
+type StrategyPerformanceRow = {
+  total_decisions: number | null;
+  avg_quality: number | null;
+  avg_time: number | null;
+  avg_tokens: number | null;
+  satisfaction: number | null;
+  positive_count: number | null;
+  negative_count: number | null;
+  neutral_count: number | null;
+};
+
+type FeedbackBreakdownRow = {
+  positive: number | null;
+  negative: number | null;
+  neutral: number | null;
+  total: number | null;
+};
+
+type SatisfactionTrendRow = {
+  score: number | null;
+};
+
 /**
  * Strategy Analytics
  * Logs decisions and outcomes for performance tracking
@@ -125,16 +147,16 @@ export class StrategyAnalytics {
       WHERE d.strategy_name = ?
     `);
 
-    const row = stmt.get(strategyName) as any;
+    const row = stmt.get(strategyName) as StrategyPerformanceRow | undefined;
 
     return {
       strategyName,
-      totalDecisions: row.total_decisions || 0,
-      successRate: (row.avg_quality || 0.8),
-      averageResponseTime: row.avg_time || 0,
-      averageTokens: row.avg_tokens || 0,
-      averageQuality: row.avg_quality || 0.8,
-      userSatisfaction: row.satisfaction || 0.8,
+      totalDecisions: row?.total_decisions ?? 0,
+      successRate: row?.avg_quality ?? 0.8,
+      averageResponseTime: row?.avg_time ?? 0,
+      averageTokens: row?.avg_tokens ?? 0,
+      averageQuality: row?.avg_quality ?? 0.8,
+      userSatisfaction: row?.satisfaction ?? 0.8,
       costEfficiency: 0.85, // Placeholder
       lastUpdated: new Date()
     };
@@ -159,7 +181,7 @@ export class StrategyAnalytics {
       WHERE d.strategy_name = ?
     `);
 
-    const row = stmt.get(strategyName) as any;
+    const row = stmt.get(strategyName) as FeedbackBreakdownRow | undefined;
 
     // Get trend over last 10 decisions
     const trendStmt = this.db.prepare(`
@@ -174,14 +196,14 @@ export class StrategyAnalytics {
       LIMIT 10
     `);
 
-    const trendRows = trendStmt.all(strategyName) as any[];
-    const satisfactionTrend = trendRows.map(r => r.score || 0.5).reverse();
+    const trendRows = trendStmt.all(strategyName) as SatisfactionTrendRow[];
+    const satisfactionTrend = trendRows.map(r => r.score ?? 0.5).reverse();
 
     return {
-      positive: row.positive || 0,
-      negative: row.negative || 0,
-      neutral: row.neutral || 0,
-      total: row.total || 0,
+      positive: row?.positive ?? 0,
+      negative: row?.negative ?? 0,
+      neutral: row?.neutral ?? 0,
+      total: row?.total ?? 0,
       satisfactionTrend
     };
   }

@@ -4,6 +4,36 @@ import { ModelChainWorkflow } from './workflows/chain';
 import { EnsembleWorkflow } from './workflows/ensemble';
 import type { ChatCompletionMessageParam } from 'openai/resources/chat';
 
+type CombinedWorkflowMetadata = {
+  type: 'combined';
+  ensemble: {
+    confidence: number;
+    agreement: number;
+    selectedModel: string;
+    lowConsensus: boolean;
+  };
+  chain: {
+    steps: number;
+    totalTime: number;
+  };
+};
+
+type ChainWorkflowMetadata = {
+  type: 'chain';
+  steps: number;
+  totalTime: number;
+};
+
+type EnsembleWorkflowMetadata = {
+  type: 'ensemble';
+  confidence: number;
+  agreement: number;
+  selectedModel: string;
+  lowConsensus: boolean;
+};
+
+type WorkflowMetadata = CombinedWorkflowMetadata | ChainWorkflowMetadata | EnsembleWorkflowMetadata;
+
 /**
  * Multi-Model Workflow Orchestrator
  * Coordinates chain/ensemble execution
@@ -16,7 +46,7 @@ export class MultiModelOrchestrator {
     userQuestion: string
   ): Promise<{
     response: string;
-    workflowMetadata: any;
+    workflowMetadata: WorkflowMetadata;
     tokensUsed: number;
   }> {
     if (decision.modelChain?.enabled && decision.ensembleConfig?.enabled) {

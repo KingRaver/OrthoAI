@@ -6,20 +6,20 @@
 
 export async function register() {
   if (process.env.NEXT_RUNTIME === 'nodejs') {
-    // Configure undici (used by Next.js fetch) to have no timeouts
-    // This prevents HeadersTimeoutError for long-running LLM requests
+    // Configure undici (used by Next.js fetch) with bounded timeouts
     const { setGlobalDispatcher, Agent } = await import('undici');
+    const { getLlmRequestTimeoutMs } = await import('./app/lib/llm/config');
+    const requestTimeoutMs = getLlmRequestTimeoutMs();
 
     setGlobalDispatcher(
       new Agent({
-        // Remove all timeout restrictions
-        headersTimeout: 0, // 0 = no timeout
-        bodyTimeout: 0,    // 0 = no timeout
-        connectTimeout: 0, // 0 = no timeout
+        headersTimeout: requestTimeoutMs,
+        bodyTimeout: requestTimeoutMs,
+        connectTimeout: Math.min(30000, requestTimeoutMs),
 
         // Keep connections alive
-        keepAliveTimeout: 600000, // 10 minutes
-        keepAliveMaxTimeout: 600000,
+        keepAliveTimeout: Math.min(600000, requestTimeoutMs),
+        keepAliveMaxTimeout: Math.min(600000, requestTimeoutMs),
 
         // Connection pool settings
         connections: 100,
@@ -27,6 +27,6 @@ export async function register() {
       })
     );
 
-    console.log('[Instrumentation] Undici configured with no timeouts for long-running LLM requests');
+    console.log(`[Instrumentation] Undici configured with bounded timeouts (${requestTimeoutMs}ms)`);
   }
 }

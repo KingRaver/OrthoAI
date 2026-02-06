@@ -11,6 +11,13 @@ import { useVoiceInput } from './useVoiceInput';
 import { useVoiceOutput } from './useVoiceOutput';
 
 type ConversationState = 'idle' | 'listening' | 'processing' | 'thinking' | 'speaking' | 'auto-resuming' | 'error';
+const DEBUG_VOICE = process.env.NEXT_PUBLIC_DEBUG_VOICE === 'true';
+const voiceLog = (...args: unknown[]) => {
+  if (DEBUG_VOICE) console.log(...args);
+};
+const voiceWarn = (...args: unknown[]) => {
+  if (DEBUG_VOICE) console.warn(...args);
+};
 
 interface UseVoiceFlowProps {
   onTranscript: (text: string) => void;
@@ -28,18 +35,19 @@ export function useVoiceFlow({ onTranscript, onError, onStateChange }: UseVoiceF
 
   const autoResumeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isAutoResumingRef = useRef(false);
+  const lastFrequencyUpdateRef = useRef<number>(0);
 
   // Update conversation state
   const updateState = useCallback((newState: ConversationState) => {
     setConversationState(newState);
     onStateChange?.(newState);
-    console.log(`[VoiceFlow] State: ${newState}`);
+    voiceLog(`[VoiceFlow] State: ${newState}`);
   }, [onStateChange]);
 
   // Voice input (STT with Whisper)
   const voiceInput = useVoiceInput({
     onTranscript: (text) => {
-      console.log(`[VoiceFlow] Transcript received: "${text}"`);
+      voiceLog(`[VoiceFlow] Transcript received: "${text}"`);
       setUserTranscript(text);
       updateState('processing');
 
@@ -78,13 +86,17 @@ export function useVoiceFlow({ onTranscript, onError, onStateChange }: UseVoiceF
   // Voice output (TTS)
   const voiceOutput = useVoiceOutput({
     onFrequencyAnalysis: (data) => {
-      setAudioFrequency({
-        beat: data.beat,
-        amplitude: data.amplitude
-      });
+      const now = performance.now();
+      if (now - lastFrequencyUpdateRef.current >= 60) {
+        lastFrequencyUpdateRef.current = now;
+        setAudioFrequency({
+          beat: data.beat,
+          amplitude: data.amplitude
+        });
+      }
     },
     onPlaybackEnd: () => {
-      console.log('[VoiceFlow] TTS finished - auto-resuming listening');
+      voiceLog('[VoiceFlow] TTS finished - auto-resuming listening');
       // Auto-resume listening after TTS finishes (seamless conversation loop)
       autoResumeListening();
     },
@@ -103,7 +115,7 @@ export function useVoiceFlow({ onTranscript, onError, onStateChange }: UseVoiceF
    * 3. Send transcript to Chat.tsx
    */
   const startListening = useCallback(() => {
-    console.log('[VoiceFlow] Starting listening...');
+    voiceLog('[VoiceFlow] Starting listening...');
 
     // Clear any pending auto-resume
     if (autoResumeTimeoutRef.current) {
@@ -125,7 +137,7 @@ export function useVoiceFlow({ onTranscript, onError, onStateChange }: UseVoiceF
    * Called when voice toggle is turned OFF
    */
   const stopListening = useCallback(() => {
-    console.log('[VoiceFlow] Stopping listening...');
+    voiceLog('[VoiceFlow] Stopping listening...');
 
     // Cancel auto-resume if pending
     if (autoResumeTimeoutRef.current) {
@@ -139,51 +151,7 @@ export function useVoiceFlow({ onTranscript, onError, onStateChange }: UseVoiceF
     voiceOutput.stop();
 
     updateState('idle');
-  }, [voiceInput, voiceOutput]);
-
-  /**
-   * Speak AI response and auto-resume listening
-   * Called by Chat.tsx when LLM has generated response
-   * 
-   * @param text - The AI response text to speak
-   * @param autoResume - Whether to auto-resume listening after speaking (default: true)
-   */
-  const speakResponse = useCallback(
-    async (text: string, autoResume = true) => {
-      if (!text.trim()) {
-        console.warn('[VoiceFlow] Empty response text');
-        return;
-      }
-
-      console.log(`[VoiceFlow] Speaking response: "${text.substring(0, 50)}..."`);
-
-      setAiResponse(text);
-      updateState('speaking');
-
-      try {
-        // Speak the response
-        await voiceOutput.speak(text);
-
-        console.log('[VoiceFlow] Speech finished');
-
-        // After speech finishes, decide what to do
-        if (autoResume && voiceInput.isEnabled) {
-          // Auto-resume listening (seamless conversation loop)
-          autoResumeListening();
-        } else {
-          // Stop and wait for manual restart
-          updateState('idle');
-        }
-      } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : 'TTS error';
-        console.error('[VoiceFlow] TTS error:', errorMsg);
-        setError(errorMsg);
-        updateState('error');
-        onError?.(errorMsg);
-      }
-    },
-    [voiceOutput, voiceInput.isEnabled, onError]
-  );
+  }, [voiceInput, voiceOutput, updateState]);
 
   /**
    * Auto-resume listening after a short delay
@@ -203,7 +171,7 @@ export function useVoiceFlow({ onTranscript, onError, onStateChange }: UseVoiceF
       return;
     }
 
-    console.log('[VoiceFlow] Auto-resuming in 500ms...');
+    voiceLog('[VoiceFlow] Auto-resuming in 500ms...');
     isAutoResumingRef.current = true;
     updateState('auto-resuming');
 
@@ -220,15 +188,59 @@ export function useVoiceFlow({ onTranscript, onError, onStateChange }: UseVoiceF
         onError?.(errorMsg);
       });
     }, 500);
-  }, [voiceInput, onError]);
+  }, [voiceInput, onError, updateState]);
+
+  /**
+   * Speak AI response and auto-resume listening
+   * Called by Chat.tsx when LLM has generated response
+   * 
+   * @param text - The AI response text to speak
+   * @param autoResume - Whether to auto-resume listening after speaking (default: true)
+   */
+  const speakResponse = useCallback(
+    async (text: string, autoResume = true) => {
+      if (!text.trim()) {
+        voiceWarn('[VoiceFlow] Empty response text');
+        return;
+      }
+
+      voiceLog(`[VoiceFlow] Speaking response: "${text.substring(0, 50)}..."`);
+
+      setAiResponse(text);
+      updateState('speaking');
+
+      try {
+        // Speak the response
+        await voiceOutput.speak(text);
+
+        voiceLog('[VoiceFlow] Speech finished');
+
+        // After speech finishes, decide what to do
+        if (autoResume && voiceInput.isEnabled) {
+          // Auto-resume listening (seamless conversation loop)
+          autoResumeListening();
+        } else {
+          // Stop and wait for manual restart
+          updateState('idle');
+        }
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : 'TTS error';
+        console.error('[VoiceFlow] TTS error:', errorMsg);
+        setError(errorMsg);
+        updateState('error');
+        onError?.(errorMsg);
+      }
+    },
+    [voiceOutput, voiceInput.isEnabled, onError, updateState, autoResumeListening]
+  );
 
   /**
    * Notify that LLM is thinking (for UI feedback)
    */
   const setThinking = useCallback(() => {
-    console.log('[VoiceFlow] LLM thinking...');
+    voiceLog('[VoiceFlow] LLM thinking...');
     updateState('thinking');
-  }, []);
+  }, [updateState]);
 
   /**
    * Clear error state
@@ -239,7 +251,7 @@ export function useVoiceFlow({ onTranscript, onError, onStateChange }: UseVoiceF
     if (conversationState === 'error') {
       updateState('idle');
     }
-  }, [conversationState]);
+  }, [conversationState, updateState]);
 
   // Store the voice hooks in refs to avoid recreating cleanup on every render
   const voiceInputRef = useRef(voiceInput);
@@ -253,7 +265,7 @@ export function useVoiceFlow({ onTranscript, onError, onStateChange }: UseVoiceF
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      console.log('[VoiceFlow] Cleaning up...');
+      voiceLog('[VoiceFlow] Cleaning up...');
 
       // Clear timeouts
       if (autoResumeTimeoutRef.current) {
@@ -264,7 +276,6 @@ export function useVoiceFlow({ onTranscript, onError, onStateChange }: UseVoiceF
       voiceInputRef.current.stopListening();
       voiceOutputRef.current.stop();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Only run on unmount
 
   return {

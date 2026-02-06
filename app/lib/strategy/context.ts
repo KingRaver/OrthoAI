@@ -37,6 +37,7 @@ interface ConversationMetadata {
 
 type DetectionMode =
   | 'clinical-consult'
+  | 'treatment-decision'
   | 'surgical-planning'
   | 'complications-risk'
   | 'imaging-dx'
@@ -75,6 +76,7 @@ export async function buildStrategyContext(params: {
   filePath?: string;
   manualModeOverride?: DetectionMode;
   manualModelOverride?: string;
+  conversationId?: string;
 }): Promise<StrategyContext> {
   // 1. Use existing context detector
   const detection = ContextDetector.detect(
@@ -97,6 +99,7 @@ export async function buildStrategyContext(params: {
   return {
     userMessage: params.userMessage,
     conversationHistory: params.conversationHistory,
+    conversationId: params.conversationId,
     detectedMode: params.manualModeOverride || detection.mode,
     detectedDomain: detection.domain,
     detectedFileType: detection.fileType,
@@ -115,29 +118,64 @@ export async function buildStrategyContext(params: {
 
 /**
  * Calculate enhanced complexity score (0-100)
+ * Higher scores = more thorough response needed
  */
 function calculateComplexityScore(
   baseComplexity: 'simple' | 'moderate' | 'complex',
   userMessage: string
 ): number {
-  let score = baseComplexity === 'simple' ? 20 : baseComplexity === 'moderate' ? 50 : 80;
+  // Start with base score
+  let score = baseComplexity === 'simple' ? 25 : baseComplexity === 'moderate' ? 55 : 85;
 
   const messageLength = userMessage.length;
-  const hasSurgery = /\b(surgery|operative|approach|technique|implant|fixation)\b/i.test(userMessage);
-  const hasComplications = /\b(complication|risk|infection|revision|failure|nonunion)\b/i.test(userMessage);
-  const hasEvidence = /\b(guideline|systematic review|meta-analysis|cohort|case-control|RCT)\b/i.test(userMessage);
-  const hasImaging = /\b(MRI|ultrasound|CT|radiograph|x-ray)\b/i.test(userMessage);
-  const hasRehab = /\b(rehab|physical therapy|return to play|RTP|protocol)\b/i.test(userMessage);
+
+  // Surgical/procedural keywords
+  const hasSurgery = /\b(surgery|surgical|operative|approach|technique|implant|fixation|procedure|reconstruction|repair|lengthening|transfer|release|fusion|arthroplasty|arthroscopy)\b/i.test(userMessage);
+
+  // Anatomical structures (indicates clinical query)
+  const hasAnatomy = /\b(tendon|ligament|muscle|bone|joint|achilles|tibial|fibula|tibia|rotator|meniscus|cartilage|nerve|artery|fascia|capsule)\b/i.test(userMessage);
+
+  // Clinical conditions/pathology
+  const hasPathology = /\b(tear|rupture|fracture|dislocation|sprain|strain|atrophy|contracture|shortened|deformity|injury|trauma|wound|GSW|gunshot|laceration|avulsion)\b/i.test(userMessage);
+
+  // Complications and risks
+  const hasComplications = /\b(complication|risk|infection|revision|failure|nonunion|malunion|stiffness|weakness|pain|dysfunction|deficit)\b/i.test(userMessage);
+
+  // Evidence/guidelines
+  const hasEvidence = /\b(guideline|systematic review|meta-analysis|cohort|case-control|RCT|evidence|study|literature|research)\b/i.test(userMessage);
+
+  // Imaging
+  const hasImaging = /\b(MRI|ultrasound|CT|radiograph|x-ray|imaging|scan)\b/i.test(userMessage);
+
+  // Rehabilitation
+  const hasRehab = /\b(rehab|rehabilitation|physical therapy|PT|return to|RTP|protocol|recovery|weight.?bearing|ROM|range of motion)\b/i.test(userMessage);
+
+  // Treatment intent indicators
+  const hasTreatmentIntent = /\b(treatment|option|procedure|what.*(do|would|should)|how.*(treat|fix|repair)|recommend|best|approach)\b/i.test(userMessage);
+
+  // Active lifestyle / functional goals
+  const hasFunctionalGoals = /\b(walk|run|sport|active|lifestyle|return to|play|work|function|mobility|strength)\b/i.test(userMessage);
+
   const lineCount = userMessage.split('\n').length;
 
-  if (messageLength > 500) score += 10;
-  if (messageLength > 1000) score += 10;
-  if (hasSurgery) score += 10;
+  // Add complexity for each matched category
+  if (messageLength > 300) score += 8;
+  if (messageLength > 600) score += 8;
+  if (hasSurgery) score += 15;
+  if (hasAnatomy) score += 12;
+  if (hasPathology) score += 15;
   if (hasComplications) score += 10;
   if (hasEvidence) score += 8;
-  if (hasImaging) score += 6;
-  if (hasRehab) score += 6;
-  if (lineCount > 50) score += 6;
+  if (hasImaging) score += 8;
+  if (hasRehab) score += 8;
+  if (hasTreatmentIntent) score += 10;
+  if (hasFunctionalGoals) score += 8;
+  if (lineCount > 10) score += 5;
+
+  // Clinical queries should have minimum complexity of 35 to ensure good responses
+  if (hasAnatomy || hasPathology || hasSurgery) {
+    score = Math.max(score, 35);
+  }
 
   return Math.min(100, Math.max(0, score));
 }

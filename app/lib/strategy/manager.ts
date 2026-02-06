@@ -34,12 +34,14 @@ export class StrategyManager {
     rawContext: Partial<StrategyContext>
   ): Promise<StrategyDecision> {
     try {
+      void _strategyType;
       // Build full context
       const context = await buildStrategyContext({
         userMessage: rawContext.userMessage!,
         conversationHistory: rawContext.conversationHistory || [],
         manualModeOverride: rawContext.manualModeOverride,
-        manualModelOverride: rawContext.manualModelOverride
+        manualModelOverride: rawContext.manualModelOverride,
+        conversationId: rawContext.conversationId
       });
 
       // Workflow-first: always use the combined workflow strategy

@@ -32,6 +32,19 @@ export interface ModePerformance {
   };
 }
 
+type ModePerformanceRow = {
+  total: number | null;
+  avg_quality: number | null;
+  satisfaction: number | null;
+  positive_count: number | null;
+  negative_count: number | null;
+  neutral_count: number | null;
+};
+
+type ModeTrendRow = {
+  score: number | null;
+};
+
 export class ModeAnalytics {
   private db!: sqlite3.Database;
 
@@ -129,7 +142,7 @@ export class ModeAnalytics {
       WHERE mode = ?
     `);
 
-    const row = stmt.get(mode) as any;
+    const row = stmt.get(mode) as ModePerformanceRow;
 
     // Get trend over last 10 interactions
     const trendStmt = this.db.prepare(`
@@ -143,7 +156,7 @@ export class ModeAnalytics {
       LIMIT 10
     `);
 
-    const trendRows = trendStmt.all(mode) as any[];
+    const trendRows = trendStmt.all(mode) as ModeTrendRow[];
     const satisfactionTrend = trendRows.map(r => r.score || 0.5).reverse();
 
     return {

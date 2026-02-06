@@ -8,6 +8,12 @@ interface FrequencyData {
   timestamp: number;
 }
 
+declare global {
+  interface Window {
+    webkitAudioContext?: typeof AudioContext;
+  }
+}
+
 export class AudioAnalyzer {
   private audioContext: AudioContext;
   private analyser: AnalyserNode;
@@ -25,7 +31,11 @@ export class AudioAnalyzer {
       this.audioContext = audioContext;
       this.ownsContext = false;
     } else {
-      this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const AudioContextCtor = window.AudioContext ?? window.webkitAudioContext;
+      if (!AudioContextCtor) {
+        throw new Error('AudioContext is not supported in this environment');
+      }
+      this.audioContext = new AudioContextCtor();
       this.ownsContext = true;
     }
 
