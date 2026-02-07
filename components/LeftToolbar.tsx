@@ -23,9 +23,11 @@ export interface ToolbarSettings {
     | 'rehab-rtp'
     | 'evidence-brief';
   enableTools: boolean;
+  researchMode: boolean;
   voiceEnabled: boolean;
   memoryConsent: boolean;
   selectedCaseId: string | null;
+  microphoneSensitivity: number;
 }
 
 interface PatientCaseOption {
@@ -49,9 +51,11 @@ export default function LeftToolbar({
   const [settings, setSettings] = useState<ToolbarSettings>({
     manualMode: '',
     enableTools: false,
+    researchMode: false,
     voiceEnabled: false,
     memoryConsent: false,
     selectedCaseId: null,
+    microphoneSensitivity: 1,
   });
 
   // Case selector state
@@ -365,6 +369,18 @@ export default function LeftToolbar({
             </button>
 
             <button
+              onClick={() => updateSetting('researchMode', !settings.researchMode)}
+              className={`${toggleStyle} ${
+                settings.researchMode
+                  ? 'bg-linear-to-r from-blue-500/90 to-cyan-500/90 text-white border-slate-900/70'
+                  : 'bg-white/60 text-slate-900 border-slate-900/40 hover:border-slate-900/70'
+              }`}
+              title="Enable remote evidence lookup (PubMed/Cochrane)"
+            >
+              📚 Research {settings.researchMode ? 'ON' : 'OFF'}
+            </button>
+
+            <button
               onClick={handleMemoryConsentToggle}
               className={`${toggleStyle} ${
                 settings.memoryConsent
@@ -387,6 +403,27 @@ export default function LeftToolbar({
             >
               🎙️ Voice {settings.voiceEnabled ? 'ON' : 'OFF'}
             </button>
+
+            <div className="rounded-2xl border-2 border-slate-900/30 bg-white/60 px-3 py-2">
+              <div className="flex items-center justify-between text-[11px] font-bold text-slate-900 mb-1">
+                <span>🎚️ Mic Sensitivity</span>
+                <span>{settings.microphoneSensitivity.toFixed(1)}x</span>
+              </div>
+              <input
+                type="range"
+                min={0.5}
+                max={2}
+                step={0.1}
+                value={settings.microphoneSensitivity}
+                onChange={(e) =>
+                  updateSetting('microphoneSensitivity', Number(e.target.value))
+                }
+                className="w-full accent-red-500 cursor-pointer"
+              />
+              <div className="text-[10px] text-slate-600 mt-1">
+                Lower blocks room noise, higher catches quieter speech.
+              </div>
+            </div>
 
             {/* Profile Section - Expandable */}
             <div className="mt-3 rounded-2xl border-2 border-slate-900/30 bg-white/60 overflow-hidden">
@@ -519,6 +556,16 @@ export default function LeftToolbar({
           🛠️ Tools
         </button>
         <button
+          onClick={() => updateSetting('researchMode', !settings.researchMode)}
+          className={`${toggleStyle} ${
+            settings.researchMode
+              ? 'bg-linear-to-r from-blue-500/90 to-cyan-500/90 text-white border-slate-900/70'
+              : 'bg-white/60 text-slate-900 border-slate-900/40'
+          }`}
+        >
+          📚 Research
+        </button>
+        <button
           onClick={handleMemoryConsentToggle}
           className={`${toggleStyle} ${
             settings.memoryConsent
@@ -538,6 +585,23 @@ export default function LeftToolbar({
         >
           🎙️ Voice
         </button>
+        <div className="w-full rounded-xl border-2 border-slate-900/30 bg-white/70 px-3 py-2">
+          <div className="flex items-center justify-between text-[11px] font-bold text-slate-900 mb-1">
+            <span>🎚️ Mic Sensitivity</span>
+            <span>{settings.microphoneSensitivity.toFixed(1)}x</span>
+          </div>
+          <input
+            type="range"
+            min={0.5}
+            max={2}
+            step={0.1}
+            value={settings.microphoneSensitivity}
+            onChange={(e) =>
+              updateSetting('microphoneSensitivity', Number(e.target.value))
+            }
+            className="w-full accent-red-500 cursor-pointer"
+          />
+        </div>
       </div>
     </>
   );

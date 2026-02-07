@@ -4,6 +4,7 @@ import { ChromaRetrieval } from '@/app/lib/memory/rag/retrieval';
 import { deduplicateAndRerank } from '@/app/lib/memory/rag/rerank';
 import type { KnowledgeDocument, KnowledgeChunk, KnowledgeSearchResult } from './types';
 import type { RetrievalResult } from '@/app/lib/memory/schemas';
+import type { Where } from 'chromadb';
 import { createHash } from 'crypto';
 
 export interface KnowledgeIngestInput {
@@ -244,7 +245,7 @@ export class KnowledgeManager {
     limit: number,
     options: KnowledgeSearchOptions
   ): Promise<RetrievalResult[]> {
-    const filters: Array<Record<string, unknown>> = [
+    const filters: Where[] = [
       { content_type: { $eq: 'knowledge_chunk' } }
     ];
 

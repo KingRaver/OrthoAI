@@ -116,7 +116,9 @@ class AudioContextRecorder {
   private audioContext: AudioContext | null = null;
   private mediaStreamSource: MediaStreamAudioSourceNode | null = null;
   private workletNode: AudioWorkletNode | null = null;
+  private silentGainNode: GainNode | null = null;
   private workletUrl: string | null = null;
+  private onChunk: ((chunk: Float32Array) => void) | null = null;
   private audioData: Float32Array[] = [];
   private sampleRate: number = 0;
   private isRecording: boolean = false;
@@ -148,12 +150,22 @@ class AudioContextRecorder {
     this.workletNode = workletNode;
 
     workletNode.port.onmessage = (event: MessageEvent<Float32Array>) => {
+      const chunk = event.data;
+      this.onChunk?.(chunk);
+
       if (!this.isRecording) return;
-      this.audioData.push(event.data);
+      this.audioData.push(chunk);
     };
 
     mediaStreamSource.connect(workletNode);
-    workletNode.connect(audioContext.destination);
+
+    // Keep worklet alive without leaking microphone audio to speakers.
+    const silentGainNode = audioContext.createGain();
+    silentGainNode.gain.value = 0;
+    this.silentGainNode = silentGainNode;
+
+    workletNode.connect(silentGainNode);
+    silentGainNode.connect(audioContext.destination);
   }
 
   /**
@@ -162,6 +174,9 @@ class AudioContextRecorder {
   start(): void {
     this.audioData = [];
     this.isRecording = true;
+    if (this.audioContext?.state === 'suspended') {
+      this.audioContext.resume().catch(() => {});
+    }
   }
 
   /**
@@ -192,6 +207,10 @@ class AudioContextRecorder {
     return this.sampleRate;
   }
 
+  setChunkListener(listener: ((chunk: Float32Array) => void) | null): void {
+    this.onChunk = listener;
+  }
+
   /**
    * Cleanup audio context
    */
@@ -199,6 +218,10 @@ class AudioContextRecorder {
     if (this.workletNode) {
       this.workletNode.port.onmessage = null;
       this.workletNode.disconnect();
+    }
+    if (this.silentGainNode) {
+      this.silentGainNode.disconnect();
+      this.silentGainNode = null;
     }
     if (this.mediaStreamSource) {
       this.mediaStreamSource.disconnect();

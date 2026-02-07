@@ -1,61 +1,70 @@
 /**
  * useVoiceFlow Hook
- * Unified voice interaction combining Whisper STT, TTS, and auto-resume logic
- * Manages the conversation flow: listen → transcribe → think → speak → auto-listen
+ * Unified voice interaction combining STT + TTS + interruption handling
+ * Flow: listen -> transcribe -> think -> speak -> auto-listen
  */
 
 'use client';
 
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useVoiceInput } from './useVoiceInput';
 import { useVoiceOutput } from './useVoiceOutput';
 
-type ConversationState = 'idle' | 'listening' | 'processing' | 'thinking' | 'speaking' | 'auto-resuming' | 'error';
+type ConversationState =
+  | 'idle'
+  | 'listening'
+  | 'processing'
+  | 'thinking'
+  | 'speaking'
+  | 'auto-resuming'
+  | 'error';
+
 const DEBUG_VOICE = process.env.NEXT_PUBLIC_DEBUG_VOICE === 'true';
 const voiceLog = (...args: unknown[]) => {
   if (DEBUG_VOICE) console.log(...args);
-};
-const voiceWarn = (...args: unknown[]) => {
-  if (DEBUG_VOICE) console.warn(...args);
 };
 
 interface UseVoiceFlowProps {
   onTranscript: (text: string) => void;
   onError?: (error: string) => void;
   onStateChange?: (state: ConversationState) => void;
+  microphoneSensitivity?: number;
 }
 
-export function useVoiceFlow({ onTranscript, onError, onStateChange }: UseVoiceFlowProps) {
-  // Conversation state machine
+export function useVoiceFlow({
+  onTranscript,
+  onError,
+  onStateChange,
+  microphoneSensitivity = 1
+}: UseVoiceFlowProps) {
   const [conversationState, setConversationState] = useState<ConversationState>('idle');
   const [audioFrequency, setAudioFrequency] = useState({ beat: 0, amplitude: 0 });
   const [userTranscript, setUserTranscript] = useState('');
+  const [transcriptionConfidence, setTranscriptionConfidence] = useState<number | null>(null);
   const [aiResponse, setAiResponse] = useState('');
   const [error, setError] = useState<string | null>(null);
 
-  const autoResumeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const conversationStateRef = useRef<ConversationState>('idle');
+  const autoResumeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isAutoResumingRef = useRef(false);
-  const lastFrequencyUpdateRef = useRef<number>(0);
+  const lastFrequencyUpdateRef = useRef(0);
 
-  // Update conversation state
   const updateState = useCallback((newState: ConversationState) => {
+    conversationStateRef.current = newState;
     setConversationState(newState);
     onStateChange?.(newState);
     voiceLog(`[VoiceFlow] State: ${newState}`);
   }, [onStateChange]);
 
-  // Voice input (STT with Whisper)
   const voiceInput = useVoiceInput({
-    onTranscript: (text) => {
+    onTranscript: (text, metadata) => {
       voiceLog(`[VoiceFlow] Transcript received: "${text}"`);
       setUserTranscript(text);
+      setTranscriptionConfidence(metadata?.confidence ?? null);
       updateState('processing');
-
-      // Fire callback to send to LLM (Chat.tsx handles this)
       onTranscript(text);
     },
     onStateChange: (inputState) => {
-      // Map voice input state to conversation state
       switch (inputState) {
         case 'listening':
           updateState('listening');
@@ -67,23 +76,25 @@ export function useVoiceFlow({ onTranscript, onError, onStateChange }: UseVoiceF
           updateState('error');
           break;
         case 'idle':
-          // Only update to idle if we're not already in another state
-          if (conversationState === 'listening' || conversationState === 'processing') {
+          if (
+            conversationStateRef.current === 'listening' ||
+            conversationStateRef.current === 'processing'
+          ) {
             updateState('idle');
           }
           break;
       }
     },
-    onError: (errorMsg) => {
-      console.error('[VoiceFlow] Voice input error:', errorMsg);
-      setError(errorMsg);
+    onError: (errorMessage) => {
+      console.error('[VoiceFlow] Voice input error:', errorMessage);
+      setError(errorMessage);
       updateState('error');
-      onError?.(errorMsg);
+      onError?.(errorMessage);
     },
-    silenceThresholdMs: 3000 // 3 seconds of silence = end of speech
+    silenceThresholdMs: 3000,
+    microphoneSensitivity
   });
 
-  // Voice output (TTS)
   const voiceOutput = useVoiceOutput({
     onFrequencyAnalysis: (data) => {
       const now = performance.now();
@@ -96,164 +107,125 @@ export function useVoiceFlow({ onTranscript, onError, onStateChange }: UseVoiceF
       }
     },
     onPlaybackEnd: () => {
-      voiceLog('[VoiceFlow] TTS finished - auto-resuming listening');
-      // Auto-resume listening after TTS finishes (seamless conversation loop)
-      autoResumeListening();
+      voiceLog('[VoiceFlow] TTS playback ended');
     },
-    onError: (errorMsg) => {
-      console.error('[VoiceFlow] Voice output error:', errorMsg);
-      setError(errorMsg);
+    onError: (errorMessage) => {
+      console.error('[VoiceFlow] Voice output error:', errorMessage);
+      setError(errorMessage);
       updateState('error');
-      onError?.(errorMsg);
+      onError?.(errorMessage);
     }
   });
 
-  /**
-   * Start voice conversation:
-   * 1. Initialize audio and start listening
-   * 2. Detect speech and silence
-   * 3. Send transcript to Chat.tsx
-   */
   const startListening = useCallback(() => {
-    voiceLog('[VoiceFlow] Starting listening...');
-
-    // Clear any pending auto-resume
     if (autoResumeTimeoutRef.current) {
       clearTimeout(autoResumeTimeoutRef.current);
       autoResumeTimeoutRef.current = null;
     }
     isAutoResumingRef.current = false;
-
-    // Clear previous transcript
-    setUserTranscript('');
     setError(null);
-
-    // Start voice input
-    voiceInput.startListening();
+    void voiceInput.startListening();
   }, [voiceInput]);
 
-  /**
-   * Stop listening immediately
-   * Called when voice toggle is turned OFF
-   */
   const stopListening = useCallback(() => {
-    voiceLog('[VoiceFlow] Stopping listening...');
-
-    // Cancel auto-resume if pending
     if (autoResumeTimeoutRef.current) {
       clearTimeout(autoResumeTimeoutRef.current);
       autoResumeTimeoutRef.current = null;
     }
-    isAutoResumingRef.current = false;
 
-    // Stop voice input and TTS
+    isAutoResumingRef.current = false;
+    voiceInput.stopInterruptDetection();
     voiceInput.stopListening();
     voiceOutput.stop();
-
     updateState('idle');
   }, [voiceInput, voiceOutput, updateState]);
 
-  /**
-   * Auto-resume listening after a short delay
-   * Gives user time to start speaking naturally
-   */
   const autoResumeListening = useCallback(() => {
-    // Prevent double auto-resume
     if (isAutoResumingRef.current) {
-      console.warn('[VoiceFlow] Auto-resume already in progress');
       return;
     }
 
-    // Only auto-resume if voice is still enabled
     if (!voiceInput.isEnabled) {
-      console.log('[VoiceFlow] Voice is disabled - not auto-resuming');
       updateState('idle');
       return;
     }
 
-    voiceLog('[VoiceFlow] Auto-resuming in 500ms...');
     isAutoResumingRef.current = true;
     updateState('auto-resuming');
 
-    // Brief delay (0.5 seconds) before resuming to give user time to start speaking
     autoResumeTimeoutRef.current = setTimeout(() => {
       isAutoResumingRef.current = false;
-
-      // Use resumeListening() for seamless loop (doesn't reinitialize audio)
-      voiceInput.resumeListening().catch((err) => {
-        const errorMsg = err instanceof Error ? err.message : 'Resume listening failed';
-        console.error('[VoiceFlow] Resume listening error:', errorMsg);
-        setError(errorMsg);
+      void voiceInput.resumeListening().catch((resumeError: unknown) => {
+        const errorMessage = resumeError instanceof Error
+          ? resumeError.message
+          : 'Resume listening failed';
+        setError(errorMessage);
         updateState('error');
-        onError?.(errorMsg);
+        onError?.(errorMessage);
       });
     }, 500);
   }, [voiceInput, onError, updateState]);
 
-  /**
-   * Speak AI response and auto-resume listening
-   * Called by Chat.tsx when LLM has generated response
-   * 
-   * @param text - The AI response text to speak
-   * @param autoResume - Whether to auto-resume listening after speaking (default: true)
-   */
   const speakResponse = useCallback(
     async (text: string, autoResume = true) => {
-      if (!text.trim()) {
-        voiceWarn('[VoiceFlow] Empty response text');
-        return;
-      }
-
-      voiceLog(`[VoiceFlow] Speaking response: "${text.substring(0, 50)}..."`);
+      if (!text.trim()) return;
 
       setAiResponse(text);
       updateState('speaking');
 
+      let interrupted = false;
+      let speakFailed = false;
+      if (voiceInput.isEnabled) {
+        voiceInput.startInterruptDetection(() => {
+          if (interrupted) return;
+          interrupted = true;
+          voiceLog('[VoiceFlow] Barge-in detected, interrupting TTS');
+          voiceOutput.stop();
+          void voiceInput.startListening();
+          updateState('listening');
+        });
+      }
+
       try {
-        // Speak the response
         await voiceOutput.speak(text);
-
-        voiceLog('[VoiceFlow] Speech finished');
-
-        // After speech finishes, decide what to do
-        if (autoResume && voiceInput.isEnabled) {
-          // Auto-resume listening (seamless conversation loop)
-          autoResumeListening();
-        } else {
-          // Stop and wait for manual restart
-          updateState('idle');
-        }
-      } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : 'TTS error';
-        console.error('[VoiceFlow] TTS error:', errorMsg);
-        setError(errorMsg);
+      } catch (speakError: unknown) {
+        speakFailed = true;
+        const errorMessage = speakError instanceof Error ? speakError.message : 'TTS error';
+        setError(errorMessage);
         updateState('error');
-        onError?.(errorMsg);
+        onError?.(errorMessage);
+      } finally {
+        voiceInput.stopInterruptDetection();
+      }
+
+      if (interrupted) {
+        return;
+      }
+
+      if (speakFailed) {
+        return;
+      }
+
+      if (autoResume && voiceInput.isEnabled) {
+        autoResumeListening();
+      } else {
+        updateState('idle');
       }
     },
-    [voiceOutput, voiceInput.isEnabled, onError, updateState, autoResumeListening]
+    [voiceInput, voiceOutput, onError, updateState, autoResumeListening]
   );
 
-  /**
-   * Notify that LLM is thinking (for UI feedback)
-   */
   const setThinking = useCallback(() => {
-    voiceLog('[VoiceFlow] LLM thinking...');
     updateState('thinking');
   }, [updateState]);
 
-  /**
-   * Clear error state
-   */
   const clearError = useCallback(() => {
     setError(null);
-    // Return to idle if in error state
-    if (conversationState === 'error') {
+    if (conversationStateRef.current === 'error') {
       updateState('idle');
     }
-  }, [conversationState, updateState]);
+  }, [updateState]);
 
-  // Store the voice hooks in refs to avoid recreating cleanup on every render
   const voiceInputRef = useRef(voiceInput);
   const voiceOutputRef = useRef(voiceOutput);
 
@@ -262,41 +234,33 @@ export function useVoiceFlow({ onTranscript, onError, onStateChange }: UseVoiceF
     voiceOutputRef.current = voiceOutput;
   });
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
-      voiceLog('[VoiceFlow] Cleaning up...');
-
-      // Clear timeouts
       if (autoResumeTimeoutRef.current) {
         clearTimeout(autoResumeTimeoutRef.current);
       }
-
-      // Stop listening and speaking using refs to avoid dependency issues
+      voiceInputRef.current.stopInterruptDetection();
       voiceInputRef.current.stopListening();
       voiceOutputRef.current.stop();
     };
-  }, []); // Only run on unmount
+  }, []);
 
   return {
-    // Conversation state and data
     state: conversationState,
     userTranscript,
+    transcriptionConfidence,
     aiResponse,
     error,
     audioFrequency,
 
-    // Voice input state
     isListening: voiceInput.state === 'listening',
     isProcessing: voiceInput.state === 'processing',
     audioLevel: voiceInput.audioLevel,
     voiceEnabled: voiceInput.isEnabled,
 
-    // Voice output state
     isPlaying: voiceOutput.isPlaying,
     speakingProgress: voiceOutput.progress,
 
-    // Control methods
     startListening,
     stopListening,
     speakResponse,

@@ -34,8 +34,8 @@ OrthoAI is a privacy-first, offline-capable clinical intelligence assistant that
 - [x] Replace Ollama runtime with llama.cpp server
 - [x] Configure BioMistral + BioGPT as primary models
 - [x] Update database path to `.data/orthoai.db`
-- [ ] Validate llama.cpp server configuration on M4 hardware
-- [ ] Confirm embedding endpoint performance under load
+- [x] Validate llama.cpp server configuration on M4 hardware
+- [x] Confirm embedding endpoint performance under load
 - [x] Add bounded timeouts (10-20 min default) for LLM requests
 
 ### Clinical Domain System
@@ -158,21 +158,21 @@ OrthoAI is a privacy-first, offline-capable clinical intelligence assistant that
 **Objective:** Enable voice-first interaction for clinical and research workflows.
 
 ### Voice Infrastructure
-- [ ] Replace per-request STT process spawn with persistent whisper.cpp server
-- [ ] Replace per-request TTS spawn with persistent Piper worker
-- [ ] Stream audio to STT instead of file I/O
-- [ ] Use in-memory pipes for TTS output
+- [x] Replace per-request STT process spawn with persistent whisper.cpp server
+- [x] Replace per-request TTS spawn with persistent Piper worker
+- [x] Stream audio to STT instead of file I/O
+- [x] Use in-memory pipes for TTS output
 
 ### Audio Modernization
-- [ ] Migrate from ScriptProcessorNode to AudioWorklet
-- [ ] Record directly in WAV format (bypass WebM conversion)
-- [ ] Implement adaptive silence detection thresholds
-- [ ] Add user-configurable microphone sensitivity
+- [x] Migrate from ScriptProcessorNode to AudioWorklet
+- [x] Record directly in WAV format (bypass WebM conversion)
+- [x] Implement adaptive silence detection thresholds
+- [x] Add user-configurable microphone sensitivity
 
 ### Interaction Polish
-- [ ] Interrupt handling for mid-response voice commands
-- [ ] Visual feedback during STT processing
-- [ ] Confidence indicators for transcription quality
+- [x] Interrupt handling for mid-response voice commands
+- [x] Visual feedback during STT processing
+- [x] Confidence indicators for transcription quality
 
 ---
 
@@ -181,29 +181,29 @@ OrthoAI is a privacy-first, offline-capable clinical intelligence assistant that
 **Objective:** Integrate authoritative clinical guidelines and evidence-based protocols.
 
 ### Clinical Guidelines Integration
-- [ ] AAOS Clinical Practice Guidelines (orthopedic-specific)
-- [ ] AO Foundation fracture classification and treatment
-- [ ] ACSM exercise prescription guidelines
-- [ ] Physical therapy protocol databases
-- [ ] Surgical approach atlases
+- [x] AAOS Clinical Practice Guidelines (orthopedic-specific)
+- [x] AO Foundation fracture classification and treatment
+- [x] ACSM exercise prescription guidelines
+- [x] Physical therapy protocol databases
+- [x] Surgical approach atlases
 
 ### Evidence Integration (Optional Research Mode)
-- [ ] PubMed E-utilities API client for literature lookup
-- [ ] Cochrane systematic review integration
-- [ ] Parse and rank evidence by level (RCT, cohort, case series)
-- [ ] Link treatment recommendations to supporting evidence
+- [x] PubMed E-utilities API client for literature lookup
+- [x] Cochrane systematic review integration
+- [x] Parse and rank evidence by level (RCT, cohort, case series)
+- [x] Link treatment recommendations to supporting evidence
 
 ### Drug & Device Knowledge
-- [ ] Orthopedic implant databases (hip, knee, shoulder systems)
-- [ ] Medication protocols (NSAIDs, opioids, antibiotics, anticoagulation)
-- [ ] Injection techniques (corticosteroid, viscosupplementation, PRP)
-- [ ] DME and bracing recommendations
+- [x] Orthopedic implant databases (hip, knee, shoulder systems)
+- [x] Medication protocols (NSAIDs, opioids, antibiotics, anticoagulation)
+- [x] Injection techniques (corticosteroid, viscosupplementation, PRP)
+- [x] DME and bracing recommendations
 
 ### Ingestion Pipeline
-- [ ] Background job queue for content updates
-- [ ] Version tracking for guideline updates
-- [ ] Incremental sync for new evidence
-- [ ] Storage quota management and cleanup policies
+- [x] Background job queue for content updates
+- [x] Version tracking for guideline updates
+- [x] Incremental sync for new evidence
+- [x] Storage quota management and cleanup policies
 
 ---
 

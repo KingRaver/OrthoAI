@@ -59,6 +59,7 @@ export function useVoiceOutput(options: UseVoiceOutputOptions = {}) {
   const sourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
   const previousAmplitudeRef = useRef<number>(0);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const playbackAbortRef = useRef<AbortController | null>(null);
   const initializedRef = useRef(false);
 
   // Store callbacks in refs to avoid re-initialization
@@ -163,11 +164,16 @@ export function useVoiceOutput(options: UseVoiceOutputOptions = {}) {
 
         voiceLog(`[VoiceOutput] Starting TTS for text (${text.length} chars): "${text.substring(0, 50)}..."`);
 
-        // Cancel any previous request
-        if (abortControllerRef.current) {
-          abortControllerRef.current.abort();
-        }
-        abortControllerRef.current = new AbortController();
+            // Cancel any previous request
+            if (abortControllerRef.current) {
+              abortControllerRef.current.abort();
+            }
+            abortControllerRef.current = new AbortController();
+
+            if (playbackAbortRef.current) {
+              playbackAbortRef.current.abort();
+            }
+            playbackAbortRef.current = new AbortController();
 
         (async () => {
           try {
@@ -227,43 +233,54 @@ export function useVoiceOutput(options: UseVoiceOutputOptions = {}) {
             const playPromise = audioElement.play();
 
             if (playPromise !== undefined) {
-              playPromise
-                .then(() => {
-                  voiceLog('[VoiceOutput] Audio playback started successfully');
-                  setState(prev => ({
-                    ...prev,
-                    isGenerating: false
-                  }));
-                })
-                .catch(err => {
-                  console.error('[VoiceOutput] Play promise rejected:', err);
-                  // Ignore abort errors (user cancelled)
-                  if (err.name !== 'AbortError') {
-                    throw err;
-                  }
-                });
+              try {
+                await playPromise;
+                voiceLog('[VoiceOutput] Audio playback started successfully');
+                setState(prev => ({
+                  ...prev,
+                  isGenerating: false
+                }));
+              } catch (err: unknown) {
+                if (err instanceof Error && err.name === 'AbortError') {
+                  resolve();
+                  return;
+                }
+                throw err;
+              }
             } else {
               voiceWarn('[VoiceOutput] play() did not return a promise');
+              setState(prev => ({ ...prev, isGenerating: false }));
             }
 
             // Wait for audio to finish
             await new Promise<void>((audioResolve, audioReject) => {
-              const onEnded = () => {
+              const playbackSignal = playbackAbortRef.current?.signal;
+
+              const cleanup = () => {
                 audioElement.removeEventListener('ended', onEnded);
                 audioElement.removeEventListener('error', onError);
+                playbackSignal?.removeEventListener('abort', onAbort);
                 URL.revokeObjectURL(audioUrl);
+              };
+
+              const onEnded = () => {
+                cleanup();
                 audioResolve();
               };
 
               const onError = () => {
-                audioElement.removeEventListener('ended', onEnded);
-                audioElement.removeEventListener('error', onError);
-                URL.revokeObjectURL(audioUrl);
+                cleanup();
                 audioReject(new Error(`Audio playback failed: ${audioElement.error?.message}`));
+              };
+
+              const onAbort = () => {
+                cleanup();
+                audioResolve();
               };
 
               audioElement.addEventListener('ended', onEnded);
               audioElement.addEventListener('error', onError);
+              playbackSignal?.addEventListener('abort', onAbort, { once: true });
             });
 
             resolve();
@@ -298,6 +315,9 @@ export function useVoiceOutput(options: UseVoiceOutputOptions = {}) {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
+    if (playbackAbortRef.current) {
+      playbackAbortRef.current.abort();
+    }
 
     if (audioElementRef.current) {
       audioElementRef.current.pause();
@@ -330,6 +350,9 @@ export function useVoiceOutput(options: UseVoiceOutputOptions = {}) {
     return () => {
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
+      }
+      if (playbackAbortRef.current) {
+        playbackAbortRef.current.abort();
       }
       if (audioElementRef.current) {
         audioElementRef.current.pause();

@@ -147,9 +147,11 @@ export default function Chat() {
   const [currentSettings, setCurrentSettings] = useState<ToolbarSettings>({
     manualMode: '',
     enableTools: false,
+    researchMode: false,
     voiceEnabled: false,
     memoryConsent: false,
     selectedCaseId: null,
+    microphoneSensitivity: 1,
   });
   
   // Refs
@@ -282,6 +284,7 @@ export default function Chat() {
           messages: [...messages, userMsg],
           stream: shouldStream,
           enableTools: currentSettings.enableTools,
+          researchMode: currentSettings.researchMode,
           useMemory: currentSettings.memoryConsent,
           manualModeOverride: currentSettings.manualMode || undefined,
           conversationId: conversationId || undefined,
@@ -669,6 +672,7 @@ export default function Chat() {
               ref={attachVoicePanelRef}
               enabled={currentSettings.voiceEnabled}
               isLoading={isLoading}
+              microphoneSensitivity={currentSettings.microphoneSensitivity}
               onTranscript={(text) => {
                 if (DEBUG_VOICE) {
                   console.log('[Chat] Voice transcript received:', text);
@@ -723,6 +727,7 @@ export default function Chat() {
             } ${currentSettings.manualMode}`}
             {currentSettings.voiceEnabled && ' • 🎤 Voice Active'}
             {currentSettings.selectedCaseId && ' • 📋 Case Context Active'}
+            {currentSettings.researchMode && ' • 📚 Research Mode'}
           </div>
         </div>
       </div>
