@@ -1,702 +1,392 @@
-# Memory System Upgrade - Implementation Roadmap
+# Memory Implementation Context (OrthoAI)
 
-**Project Start:** 2026-01-18
-**Current Status:** Phase 3 COMPLETE ✅
-**Next Phase:** Phase 4 (Chunking) - Requires Phase 3 metrics analysis
-**Documentation:** See [CONTEXT.md](CONTEXT.md) for technical specifications
-
----
-
-## Overview
-
-This document tracks the implementation of the memory system upgrades outlined in [CONTEXT.md](CONTEXT.md). Each phase is designed to be:
-- **Incremental:** Builds on previous phases
-- **Reversible:** Feature flags allow rollback
-- **Measurable:** Metrics track effectiveness
-- **Safe:** No behavior changes until validated
+**Last validated:** 2026-02-07  
+**Repository scope:** `/Users/jeffspirlock/OrthoAI`  
+**Purpose:** Current-state implementation map for memory/RAG, including legacy carry-over notes and a prioritized recovery checklist.
 
 ---
 
-## Phase Completion Status
+## 1) Scope and Ground Rules
 
-| Phase | Status | Completion Date | Risk Level | Deployment Status |
-|-------|--------|----------------|------------|-------------------|
-| Phase 1: Baseline Audit | ✅ COMPLETE | 2026-01-18 | Minimal | Production-ready |
-| Phase 2: Summaries + Profile | ✅ COMPLETE | 2026-01-20 | Low | Ready for services testing |
-| Phase 3: Hybrid Retrieval | ✅ COMPLETE | 2026-01-25 | Moderate | Production-ready |
-| Phase 4: Chunking | ⏸️ BLOCKED | - | Moderate | Requires Phase 3 metrics |
-| Phase 5: Stabilization | ⏸️ BLOCKED | - | Low | Requires Phase 3-4 metrics |
+This document is now **repo-local** and only describes what exists in this OrthoAI directory.
+
+- If a feature is only documented in old plans but not present in this repo, it is treated as **not implemented here**.
+- Runtime observations are based on the current local DB (`.data/orthoai.db`) and code paths in this repo.
+- This file supersedes earlier cross-directory assumptions.
 
 ---
 
-## Phase 1: Baseline Audit + Diagnostics ✅
+## 2) Legacy vs Current (Hacker Reign -> OrthoAI)
 
-### Objectives
-- Establish metrics collection infrastructure
-- Add feature flag system
-- Create baseline performance data
-- Wire in helper methods for Phase 2
+### Legacy (reference only)
 
-### Implementation Summary
+The following are retained for historical context and are not current implementation truth:
 
-#### Files Created
-1. ✅ `app/lib/memory/migrations/004_retrieval_metrics.sql`
-   - `retrieval_metrics` table with full tracking
-   - `retrieval_metrics_summary` view for aggregation
-   - 30-day rolling retention
+- `docs/legacy/*` (explicitly marked Hacker Reign context)
+- `scripts/legacy/*` (legacy phase test scripts)
+- Any references to `Hacker Reign`, coding-assistant workflows, or `.data/hackerreign.db`
 
-2. ✅ `app/lib/memory/config.ts`
-   - `MemoryConfig` interface
-   - `getMemoryConfig()` with env var loading
-   - `validateMemoryConfig()` with error checking
-   - `getValidatedMemoryConfig()` wrapper
+### Current (source of truth)
 
-3. ✅ `app/lib/memory/metrics.ts`
-   - `RetrievalMetrics` interface
-   - `logRetrievalMetrics()` - async logging
-   - `getMetricsSummary()` - aggregated stats
-   - `getDailyMetrics()` - time-series data
-   - `cleanupOldMetrics()` - retention enforcement
+- `README.md` (OrthoAI product overview)
+- `docs/STARTUP.md` (current local runtime startup)
+- `docs/audits/ROADMAP.md` (current roadmap framing)
+- `app/lib/memory/*`, `app/api/memory/*`, `app/api/profile/*` (actual memory implementation)
+- `.data/orthoai.db` (active memory database path)
 
-4. ✅ `app/api/memory/metrics/route.ts`
-   - `GET /api/memory/metrics` - summary endpoint
-   - Query params: `?type=summary|daily|config&days=N`
-   - `POST /api/memory/metrics` - cleanup endpoint
+### Migration interpretation
 
-5. ✅ `scripts/test-phase1-metrics.ts`
-   - Comprehensive test suite
-   - Validates all Phase 1 features
-   - Safe to run (cleans up test data)
-
-#### Files Modified
-1. ✅ `app/lib/memory/rag/index.ts`
-   - Added imports: `logRetrievalMetrics`, `getMemoryConfig`
-   - Modified `retrieveSimilarMessages()`:
-     - Track conversation vs global results separately
-     - Measure latency for each source
-     - Extract top 3 similarities
-     - Log metrics asynchronously
-     - Handle errors gracefully
-
-2. ✅ `app/lib/memory/storage/sqlite.ts`
-   - Added `getConversationMessageCount(conversationId, role?)`
-   - Returns count for summary frequency tracking
-
-3. ✅ `app/lib/memory/index.ts`
-   - Added `getConversationMessageCount()` wrapper
-   - Documented for Phase 2 usage
-
-4. ✅ `.env.local`
-   - Added all 9 feature flags with documentation
-   - All flags default to OFF/conservative values
-
-5. ✅ `CONTEXT.md`
-   - Expanded with 700+ lines of implementation details
-   - Added code examples, schemas, algorithms
-   - Documented edge cases and error handling
-
-6. ✅ `TOOLBAR.md`
-   - Added "Planned Enhancements" section
-   - Linked to CONTEXT.md for details
-
-#### Feature Flags Added
-```bash
-RAG_HYBRID=false              # Phase 3
-RAG_CHUNKING=false            # Phase 4
-BACKFILL_CHUNKS=false         # Phase 4
-RAG_TOKEN_BUDGET=1000         # All phases
-RAG_SUMMARY_FREQUENCY=5       # Phase 2
-RAG_RERANK_ALPHA=0.6          # Phase 3
-RAG_RERANK_BETA=0.3           # Phase 3
-RAG_RERANK_GAMMA=0.1          # Phase 3
-METRICS_RETENTION_DAYS=30     # Phase 1
-```
-
-### Test Results
-```
-✅ ALL TESTS PASSED
-- Configuration: Loaded correctly, all flags OFF
-- Database: 4 migrations applied successfully
-- Metrics: 1 query logged, 2ms latency captured
-- Helpers: Message count methods working
-- Consent: Profile consent methods functional
-```
-
-### Metrics Captured
-For every retrieval operation:
-- Query text + conversation ID
-- Source counts (conversation, global, summaries, profile, FTS)
-- Latency breakdown (total, dense, FTS, rerank)
-- Top 3 similarity scores
-- Feature flag state
-
-### Deployment Notes
-- **Production-ready:** Zero risk, no behavior changes
-- **Rollback:** Simply don't query metrics API
-- **Performance:** Async logging, no user-facing latency impact
-
-### Documentation
-- ✅ [PHASE1_COMPLETE.md](PHASE1_COMPLETE.md) - Detailed completion report
-- ✅ [CONTEXT.md](CONTEXT.md) - Technical specifications
-- ✅ [TOOLBAR.md](TOOLBAR.md) - User-facing documentation
+- The old memory roadmap content was partially imported.
+- Some features were implemented, some are scaffolded only, and some are still absent.
+- Performance degradation should be treated as a **current OrthoAI integration/stabilization issue**, not just legacy noise.
 
 ---
 
-## Phase 2: Summaries + Profile ✅
+## 3) Current Implementation Matrix (OrthoAI)
 
-### Objectives
-- Implement automatic conversation summarization
-- Build profile management UI
-- Test consent enforcement
-- Deploy with summaries always-on
+### Phase 1: Baseline metrics and config
 
-### Status: IMPLEMENTATION COMPLETE
-**Completion Date:** 2026-01-20
-**Blockers:** None
-**Deployment Status:** Ready for services testing (requires Ollama/ChromaDB running)
+**Status:** Implemented
 
-### Implementation Plan
+- `app/lib/memory/migrations/004_retrieval_metrics.sql`
+- `app/lib/memory/config.ts`
+- `app/lib/memory/metrics.ts`
+- `app/api/memory/metrics/route.ts`
 
-#### Tasks
-- [x] **Task 2.1:** Implement automatic summary generation
-  - **File:** [`app/lib/memory/index.ts:115-133`](../app/lib/memory/index.ts#L115-L133)
-  - **Method:** Modified `saveMessage()` to check message count
-  - **Status:** ✅ Complete
-  - **Actual LOC:** 18 lines
+**Notes**
 
-- [x] **Task 2.2:** Implement `generateConversationSummary()`
-  - **File:** [`app/lib/memory/index.ts:184-239`](../app/lib/memory/index.ts#L184-L239)
-  - **Logic:**
-    - Fetches last 10 messages from conversation
-    - Formats for summarization prompt
-    - Calls Ollama API (`/api/generate`) to create summary
-    - Saves via `saveConversationSummary()`
-    - Handles errors gracefully (async, non-blocking)
-  - **Status:** ✅ Complete
-  - **Actual LOC:** 56 lines
+- Metrics are being written in production code path.
+- Writes are "async from caller perspective" but the DB writes themselves are synchronous once executed.
 
-- [x] **Task 2.3:** Build profile management UI
-  - **File:** [`components/LeftToolbar.tsx:363-440`](../components/LeftToolbar.tsx#L363-L440)
-  - **Implementation:** Integrated into LeftToolbar as expandable section
-  - **Features:**
-    - ✅ Collapsible hamburger-style menu
-    - ✅ Disabled when Memory consent OFF
-    - ✅ 5 structured fields (codingStyle, languages, frameworks, preferences, notes)
-    - ✅ Save/Clear buttons
-    - ✅ Loading states
-    - ✅ Auto-clears when consent revoked
-  - **Status:** ✅ Complete
-  - **Actual LOC:** 78 lines
+### Phase 2: Summaries and profile
 
-- [x] **Task 2.4:** Create `/api/profile` endpoints
-  - **File:** [`app/api/profile/route.ts`](../app/api/profile/route.ts)
-  - **Endpoints:**
-    - `GET /api/profile` - Fetches profile, parses to structured fields
-    - `POST /api/profile` - Saves profile (requires consent), creates embeddings
-    - `DELETE /api/profile` - Clears profile and embeddings
-  - **Status:** ✅ Complete
-  - **Actual LOC:** 95 lines
+**Status:** Partially operational (code present, runtime behavior needs stabilization)
 
-- [x] **Task 2.5:** Test consent enforcement
-  - **File:** [`scripts/test-phase2-summaries.ts`](../scripts/test-phase2-summaries.ts)
-  - **Tests:**
-    - ✅ Summary generation after N messages
-    - ✅ Profile consent management
-    - ✅ Profile save/retrieve/clear
-    - ✅ Consent revocation enforcement
-    - ✅ Profile embedding status tracking
-  - **Status:** ✅ Complete (requires Ollama/Chroma for full test)
-  - **Actual LOC:** 175 lines
+- Auto-summary trigger exists in `app/lib/memory/index.ts` (`saveMessage()`).
+- Summary generation exists in `app/lib/memory/index.ts` (`generateConversationSummary()`).
+- Profile API exists in `app/api/profile/route.ts`.
+- Consent API exists in `app/api/memory/consent/route.ts`.
+- Profile UI exists in `components/LeftToolbar.tsx`.
 
-- [x] **Task 2.6:** Enhance LeftToolbar with profile UI
-  - **File:** [`components/LeftToolbar.tsx`](../components/LeftToolbar.tsx)
-  - **Changes:**
-    - Added profile state management (lines 58-100)
-    - Added profile handlers (lines 139-190)
-    - Added expandable profile UI section (lines 363-440)
-  - **Status:** ✅ Complete
-  - **Actual LOC:** ~120 lines total
+**Gaps observed**
 
-#### Acceptance Criteria
-- ✅ Summaries generate automatically every N messages
-- ✅ Summary frequency configurable via `RAG_SUMMARY_FREQUENCY`
-- ✅ Profile UI allows structured + freeform editing
-- ✅ Profile never used when consent=false
-- ✅ Profile cleared immediately on consent revocation
-- ✅ No errors in console
-- ✅ Test suite passes
+- In current local DB snapshot, `conversation_summaries` has zero rows despite at least one conversation meeting summary trigger count.
+- Indicates summary pipeline is implemented but not reliably producing persisted summaries in this environment.
 
-#### Feature Flags
-- `RAG_SUMMARY_FREQUENCY=5` (already in .env.local)
-- No new flags needed
+### Phase 3: Hybrid retrieval and reranking
 
-#### Files Created
-1. ✅ [`app/api/profile/route.ts`](../app/api/profile/route.ts) - Profile API (95 lines)
-2. ✅ [`scripts/test-phase2-summaries.ts`](../scripts/test-phase2-summaries.ts) - Test suite (175 lines)
+**Status:** Implemented in code, not currently active in runtime config
 
-#### Files Modified
-1. ✅ [`app/lib/memory/index.ts`](../app/lib/memory/index.ts) - Summary generation (+74 lines)
-2. ✅ [`components/LeftToolbar.tsx`](../components/LeftToolbar.tsx) - Profile UI (+120 lines)
+- FTS retrieval: `app/lib/memory/rag/retrieval.ts` (`ftsSearch`)
+- Reranking: `app/lib/memory/rag/rerank.ts`
+- Hybrid branch integration: `app/lib/memory/rag/index.ts`
+- FTS migrations: `006_fts_index.sql`, `007_fts_triggers.sql`
 
-#### Actual Timeline
-- Implementation: ~4 hours
-- Test script creation: ~1 hour
-- **Total: 5 hours** (completed 2026-01-20)
+**Gaps observed**
 
-### Implementation Summary
+- Runtime metrics show hybrid path not active (`flag_hybrid=0` in current snapshot).
+- FTS table has substantial duplicate rows (see performance snapshot below), which increases write overhead and can degrade lexical query quality.
 
-**What Was Built:**
-1. **Automatic Summaries** - Triggers after every N assistant messages (configurable)
-2. **Profile Management** - Expandable UI in LeftToolbar with 5 structured fields
-3. **Profile API** - Full CRUD endpoints with consent enforcement
-4. **Test Suite** - Comprehensive tests for all Phase 2 features
+### Phase 4: Chunking and chunk-aware budgeting
 
-**How It Works:**
-```
-User enables Memory → Profile section appears in LeftToolbar
-  → User fills out profile fields
-  → Clicks Save → POST /api/profile
-  → MemoryManager.saveUserProfile()
-  → Profile saved to DB + embedding created
-  → Profile used in RAG retrieval (if consent granted)
+**Status:** Implemented (pending canary validation)
 
-During conversation:
-  → Every 5th assistant message → generateConversationSummary()
-  → Fetches last 10 messages → Ollama generates summary
-  → Summary saved to DB + embedding created
-  → Summary available for retrieval
-```
+- `app/lib/memory/chunking.ts` now provides code/prose chunk segmentation.
+- `015_message_chunking.sql` adds `message_chunks` + `chunks_fts` with sync triggers.
+- Chunk embedding and retrieval are wired in memory RAG (`app/lib/memory/rag/index.ts`, `app/lib/memory/rag/retrieval.ts`).
 
-### Test Results (2026-01-20)
+### Phase 5: Memory settings UI and preferences API
 
-**With services mocked:**
-- ✅ Configuration loaded correctly
-- ✅ Memory system initialized
-- ✅ Profile consent management works
-- ✅ Profile save/retrieve/clear works
-- ✅ Consent revocation clears profile access
-- ⏸️ Summary generation (requires Ollama)
-- ⏸️ Embeddings (requires ChromaDB)
+**Status:** Implemented (initial release)
 
-**Next:** Run with services:
-```bash
-# Terminal 1: Start Ollama
-ollama serve
-
-# Terminal 2: Start ChromaDB
-chroma run --path ./.data/chroma
-
-# Terminal 3: Run test
-npx tsx scripts/test-phase2-summaries.ts
-```
-
-### Next Actions
-1. ✅ ~~Implement all Phase 2 features~~
-2. ⏸️ Start Ollama and ChromaDB services
-3. ⏸️ Run full test suite with services
-4. ⏸️ Verify summaries generate correctly
-5. ⏸️ Manual UI testing
-6. ⏸️ Deploy to production with `RAG_SUMMARY_FREQUENCY=5`
+- `user_preferences` table exists.
+- `/api/memory/preferences` now supports runtime GET/POST controls.
+- Toolbar now exposes hybrid/chunking/token budget/summary frequency controls and persists them.
 
 ---
 
-## Phase 3: Hybrid Retrieval + Reranking ✅
+## 4) Runtime Performance Snapshot (Current Directory)
 
-### Objectives
-- Combine dense (semantic) + lexical (BM25) search
-- Implement reranking algorithm
-- Improve code identifier recall
-- Tune α, β, γ coefficients
+**Snapshot date:** 2026-02-07  
+**Data source:** `.data/orthoai.db`
 
-### Status: IMPLEMENTATION COMPLETE
-**Completion Date:** 2026-01-25
-**Blockers:** None
-**Deployment Status:** Production-ready (RAG_HYBRID=true enabled)
+### Retrieval metrics snapshot
 
-### Implementation Summary
+- Total retrievals logged: `21`
+- Average latency: `174.3ms`
+- p95 latency: `387ms`
+- Max latency: `409ms`
+- Hybrid active count: `0`
+- Chunking active count: `0`
 
-**What Was Built:**
-1. **FTS5 Index** - Full-text search index for lexical keyword matching
-2. **Hybrid Retrieval** - Parallel execution of dense (semantic) + FTS (lexical) search
-3. **Reranking Algorithm** - Weighted scoring combining dense similarity, BM25, and code identifier matching
-4. **Code Identifier Extraction** - Pattern matching for camelCase, snake_case, function calls, code blocks
-5. **Test Suite** - Comprehensive testing including code extraction, FTS search, hybrid retrieval, and reranking
+### Storage/index snapshot
 
-**How It Works:**
-```
-User query → Extract code identifiers
-  → Parallel execution:
-    → Dense search (Chroma semantic search)
-    → FTS search (SQLite FTS5 BM25)
-  → Deduplicate by message ID
-  → Rerank with formula: α·dense + β·bm25 + γ·code_match
-  → Return top K results
-```
+- `messages`: `55`
+- `messages_fts`: `335`
+- Distinct FTS `message_id`: `55`
+- Orphan FTS rows: `0`
+- Interpretation: high duplication per message in FTS index (write amplification and noisy lexical scoring risk)
 
-**Performance:**
-- FTS search: <5ms average latency
-- Reranking: <1ms for 20 results
-- Total overhead: <10ms vs dense-only
-- Code identifier recall: Improved detection of exact matches
+### Summary/profile snapshot
 
-### Completed Tasks
-
-#### Tasks
-- [x] **Task 3.1:** Create FTS migration
-  - **File:** `app/lib/memory/migrations/005_fts_index.sql`
-  - **Schema:** See [CONTEXT.md:301-315](CONTEXT.md#L301-L315)
-  - **Features:**
-    - `messages_fts` virtual table (FTS5)
-    - Auto-sync trigger on INSERT
-    - Porter stemming + unicode normalization
-  - **Estimated LOC:** ~30 lines SQL
-
-- [ ] **Task 3.2:** Implement FTS search method
-  - **File:** `app/lib/memory/rag/retrieval.ts`
-  - **Method:** `ftsSearch(query, conversationId, limit)`
-  - **Logic:** Query `messages_fts` with MATCH clause
-  - **Error handling:** Fallback to empty array if FTS unavailable
-  - **Estimated LOC:** ~40 lines
-
-- [ ] **Task 3.3:** Implement code identifier extraction
-  - **File:** `app/lib/memory/rag/rerank.ts` (new)
-  - **Function:** `extractCodeIdentifiers(text): Set<string>`
-  - **Logic:** See [CONTEXT.md:357-367](CONTEXT.md#L357-L367)
-  - **Patterns:** Code blocks, inline code, camelCase, function calls
-  - **Estimated LOC:** ~60 lines
-
-- [ ] **Task 3.4:** Implement reranking algorithm
-  - **File:** `app/lib/memory/rag/rerank.ts`
-  - **Function:** `deduplicateAndRerank(dense, fts, query): Result[]`
-  - **Formula:** See [CONTEXT.md:341-348](CONTEXT.md#L341-L348)
-  - **Logic:** See [CONTEXT.md:378-401](CONTEXT.md#L378-L401)
-  - **Estimated LOC:** ~80 lines
-
-- [ ] **Task 3.5:** Integrate into RAG manager
-  - **File:** `app/lib/memory/rag/index.ts`
-  - **Method:** Modify `retrieveSimilarMessages()`
-  - **Logic:**
-    ```typescript
-    if (config.ragHybrid) {
-      const [denseResults, ftsResults] = await Promise.all([
-        chromaSearch(...),
-        ftsSearch(...)
-      ]);
-      results = deduplicateAndRerank(denseResults, ftsResults, query);
-    } else {
-      results = await chromaSearch(...); // Existing path
-    }
-    ```
-  - **Metrics:** Track FTS latency and result count
-  - **Estimated LOC:** ~50 lines
-
-- [ ] **Task 3.6:** Create test set for coefficient tuning
-  - **File:** `scripts/create-rerank-testset.ts`
-  - **Content:** 20-30 queries with relevance labels
-  - **Purpose:** Grid search for optimal α, β, γ
-  - **Estimated LOC:** ~100 lines
-
-- [ ] **Task 3.7:** Implement coefficient tuning script
-  - **File:** `scripts/tune-rerank-coefficients.ts`
-  - **Logic:**
-    - Grid search over α ∈ [0.4, 0.7], β ∈ [0.2, 0.5], γ ∈ [0.05, 0.15]
-    - Evaluate NDCG@5 for each combination
-    - Output best coefficients
-  - **Estimated LOC:** ~150 lines
-
-- [ ] **Task 3.8:** Deploy beta test
-  - **Action:** Set `RAG_HYBRID=true` for internal testing
-  - **Monitor:** Latency, recall improvement, user feedback
-  - **Duration:** 1 week
-
-#### Acceptance Criteria
-- ✅ FTS index created and synced (346 messages indexed)
-- ✅ Hybrid retrieval returns both dense and FTS results
-- ✅ Code identifier extraction working (4/4 tests passed)
-- ✅ Reranking algorithm operational
-- ✅ Latency overhead <10ms (vs dense-only)
-- ⏸️ Coefficients tuned via grid search (deferred to Phase 5)
-- ✅ All tests passing
-
-#### Feature Flags
-- `RAG_HYBRID=true` ✅ **ENABLED IN PRODUCTION**
-- `RAG_RERANK_ALPHA=0.6`, `BETA=0.3`, `GAMMA=0.1` (defaults)
-
-#### Files Created
-1. ✅ [`app/lib/memory/migrations/006_fts_index.sql`](../app/lib/memory/migrations/006_fts_index.sql) (13 lines)
-2. ✅ [`app/lib/memory/migrations/007_fts_triggers.sql`](../app/lib/memory/migrations/007_fts_triggers.sql) (7 lines)
-3. ✅ [`app/lib/memory/rag/rerank.ts`](../app/lib/memory/rag/rerank.ts) (183 lines)
-4. ✅ [`app/lib/memory/schemas.ts`](../app/lib/memory/schemas.ts#L119) - Added `fts_score?` field
-5. ✅ [`scripts/test-phase3-hybrid.ts`](../scripts/test-phase3-hybrid.ts) (282 lines)
-
-#### Files Modified
-1. ✅ [`app/lib/memory/rag/retrieval.ts`](../app/lib/memory/rag/retrieval.ts) - Added `ftsSearch()` method (+83 lines)
-2. ✅ [`app/lib/memory/rag/index.ts`](../app/lib/memory/rag/index.ts) - Integrated hybrid retrieval (+72 lines)
-3. ✅ [`app/lib/memory/storage/sqlite.ts`](../app/lib/memory/storage/sqlite.ts) - Added `getDatabase()` method (+6 lines)
-4. ✅ [`.env.local`](../.env.local#L51) - Set `RAG_HYBRID=true`
-
-#### Actual Timeline
-- Implementation: ~6 hours (2026-01-25)
-- Testing & validation: ~1 hour
-- **Total: 7 hours (COMPLETE)**
-
-### Test Results (2026-01-25)
-```
-✓ FTS index verified (346 entries backfilled)
-✓ Code identifier extraction: 4/4 tests passed
-✓ FTS search functional
-✓ Hybrid retrieval working
-✓ Reranking algorithm operational
-```
-
-**Deployment Status:** 🚀 SHIPPED TO PRODUCTION
+- `conversation_summaries`: `0`
+- `user_profile`: `0`
+- Interpretation: profile and summary features are present but not currently producing durable data in this runtime snapshot
 
 ---
 
-## Phase 4: Chunking + Token Budgeting ⏸️
+## 5) Known Degradation Risks in Current Build
 
-### Objectives
-- Split long messages into code/prose chunks
-- Prevent context truncation
-- Enforce token budget
-- Prioritize relevant chunks
+1. Hot-path synchronous writes during retrieval
+- `search_queries` logging and `retrieval_metrics` logging add synchronous SQLite work per retrieval request.
 
-### Status: AWAITING PHASE 3 COMPLETION
-**Blockers:** Requires hybrid retrieval for full effectiveness
+2. Summary generation competes with primary LLM capacity
+- Summary jobs call the same chat-completions endpoint used for user responses.
+- Under load, this can increase tail latency for user requests.
 
-### Implementation Plan
+3. FTS duplication inflates write/read cost
+- Duplicate `messages_fts` rows increase trigger/write overhead and can distort lexical rank behavior.
 
-#### Tasks
-- [ ] **Task 4.1:** Create chunking migration
-  - **File:** `app/lib/memory/migrations/006_chunking.sql`
-  - **Schema:** See [CONTEXT.md:416-431](CONTEXT.md#L416-L431)
-  - **Tables:** `message_chunks`, `chunks_fts`
-  - **Estimated LOC:** ~40 lines SQL
-
-- [ ] **Task 4.2:** Implement chunking algorithm
-  - **File:** `app/lib/memory/chunking.ts` (new)
-  - **Function:** `chunkMessage(message): Chunk[]`
-  - **Logic:** See [CONTEXT.md:409-412](CONTEXT.md#L409-L412)
-  - **Patterns:** Code blocks, prose paragraphs, 500 token max
-  - **Estimated LOC:** ~120 lines
-
-- [ ] **Task 4.3:** Wire chunking into saveMessage
-  - **File:** `app/lib/memory/index.ts`
-  - **Logic:**
-    ```typescript
-    if (config.ragChunking) {
-      const chunks = chunkMessage(message);
-      await Promise.all(chunks.map(c => storage.saveChunk(c)));
-      await Promise.all(chunks.map(c => rag.embedChunk(c)));
-    }
-    ```
-  - **Estimated LOC:** ~40 lines
-
-- [ ] **Task 4.4:** Implement token budget enforcement
-  - **File:** `app/lib/memory/rag/index.ts`
-  - **Function:** `assembleMemoryContext(results, budget)`
-  - **Logic:** See [CONTEXT.md:466-496](CONTEXT.md#L466-L496)
-  - **Features:** Code chunk prioritization, boundary truncation
-  - **Estimated LOC:** ~60 lines
-
-- [ ] **Task 4.5:** Implement backfill (optional)
-  - **File:** `scripts/backfill-chunks.ts`
-  - **Logic:** Process historical messages in batches
-  - **Safety:** Progress tracking, resume capability
-  - **Estimated LOC:** ~100 lines
-
-- [ ] **Task 4.6:** Beta testing
-  - **Action:** Set `RAG_CHUNKING=true` for beta users
-  - **Monitor:** Context quality, truncation reduction
-  - **Duration:** 1 week
-
-#### Acceptance Criteria
-- ✅ Messages split into code/prose chunks
-- ✅ Chunks embedded separately
-- ✅ Token budget never exceeded by >5%
-- ✅ Code chunks prioritized for code queries
-- ✅ Context truncation reduced >50%
-- ✅ Backfill script works without errors
-
-#### Feature Flags
-- `RAG_CHUNKING=false` → `true` for beta
-- `RAG_TOKEN_BUDGET=1000` (already configured)
-- `BACKFILL_CHUNKS=false` (only for one-time backfill)
-
-#### Files to Create
-1. `app/lib/memory/migrations/006_chunking.sql`
-2. `app/lib/memory/chunking.ts`
-3. `scripts/backfill-chunks.ts`
-4. `scripts/test-phase4-chunking.ts`
-
-#### Files to Modify
-1. `app/lib/memory/index.ts` - Add chunking logic
-2. `app/lib/memory/rag/index.ts` - Token budget enforcement
-3. `app/lib/memory/storage/sqlite.ts` - Add chunk storage methods
-
-#### Estimated Timeline
-- Implementation: 10-12 hours
-- Backfill development: 3-4 hours
-- Beta testing: 1 week
-- **Total: 3-4 days + 1 week monitoring**
+4. Feature state mismatch
+- Code paths exist for hybrid/summaries/profile, but runtime data shows low activation/throughput.
+- This creates complexity cost without full benefit.
 
 ---
 
-## Phase 5: Stabilization + Settings UI ⏸️
+## 6) Recovery Checklist (High-Level Implementation Plan)
 
-### Objectives
-- Analyze metrics from Phases 3-4
-- Set production defaults based on data
-- Build user-facing settings UI
-- Document final configuration
+This checklist is prioritized to restore performance first, then complete missing capabilities.
 
-### Status: AWAITING PHASES 3-4 METRICS
-**Blockers:** Need performance data to set defaults
+### Track A: Stabilize existing memory pipeline (P0)
 
-### Implementation Plan
+**Goal:** Remove avoidable hot-path overhead and harden memory network calls so retrieval latency remains predictable under load.
 
-#### Tasks
-- [ ] **Task 5.1:** Analyze metrics
-  - Retrieve all metrics from Phase 3-4 beta periods
-  - Calculate averages, p95 latency, recall improvements
-  - Identify optimal feature flag defaults
+**A1. Hot-path write controls**
 
-- [ ] **Task 5.2:** Set production defaults
-  - Update `.env.local` with data-driven defaults
-  - Document rationale in CONTEXT.md
+- [x] Add a feature flag to disable or sample `retrieval_metrics` logging in hot path.
+- [x] Add a feature flag to disable or sample `search_queries` logging in hot path.
+- [x] Gate memory debug logs behind `DEBUG_*` flags to reduce console overhead.
 
-- [ ] **Task 5.3:** Build settings UI in LeftToolbar
-  - **File:** `components/LeftToolbar.tsx`
-  - **Settings:**
-    - ☑ Enable Hybrid Search
-    - ☑ Enable Smart Chunking
-    - Token Budget slider (800-1500)
-    - Summary Frequency selector (0, 3, 5, 10)
-  - **Layout:** See [CONTEXT.md:795-801](CONTEXT.md#L795-L801)
-  - **Estimated LOC:** ~100 lines
+**A2. Background request hardening**
 
-- [ ] **Task 5.4:** Create user preferences API
-  - **File:** `app/api/memory/preferences/route.ts`
-  - **Endpoints:**
-    - `GET /api/memory/preferences` - Fetch user overrides
-    - `POST /api/memory/preferences` - Save overrides
-  - **Estimated LOC:** ~80 lines
+- [x] Add hard timeout + retry policy for summary generation calls.
+- [x] Add hard timeout + retry policy for embedding calls.
 
-- [ ] **Task 5.5:** Update documentation
-  - Update README with final configuration
-  - Document all settings in TOOLBAR.md
-  - Add troubleshooting guide
+**A3. Operational visibility**
 
-- [ ] **Task 5.6:** Final testing
-  - End-to-end test with all phases enabled
-  - Performance regression test
-  - User acceptance testing
+- [x] Add operational visibility endpoint for queue depth + recent failures.
 
-#### Acceptance Criteria
-- ✅ Metrics analysis complete
-- ✅ Production defaults set based on data
-- ✅ Settings UI functional and intuitive
-- ✅ User preferences persist across sessions
-- ✅ Documentation complete
-- ✅ All tests pass
+**Track A patch log (2026-02-07)**
 
-#### Estimated Timeline
-- Metrics analysis: 2-3 hours
-- UI implementation: 6-8 hours
-- Testing: 2-3 hours
-- Documentation: 2-3 hours
-- **Total: 2-3 days**
+- Config/flags and sampling controls: `app/lib/memory/config.ts`
+- Retrieval metrics gating/sampling: `app/lib/memory/metrics.ts`
+- Search query logging gating/sampling: `app/lib/memory/rag/retrieval.ts`
+- Summary timeout/retry policy wiring: `app/lib/memory/index.ts`
+- Embedding timeout/retry policy wiring: `app/lib/memory/rag/embeddings.ts`
+- Debug log gating helper: `app/lib/memory/debug.ts`
+- Ops visibility endpoint: `app/api/memory/ops/route.ts`
+- Ops counters + recent failure snapshot: `app/lib/memory/ops.ts`
+
+**Track A validation notes**
+
+- Code-level verification confirms all Track A controls are implemented and wired to environment-driven configuration.
+- Runtime SLO validation remains open until canary metrics are collected under sustained real workload.
+
+**Track A exit criteria**
+
+- [ ] p95 retrieval latency meets target with `RAG_METRICS_ENABLED=true` and sampling enabled.
+- [ ] `/api/memory/ops` surfaces queue depth and recent failures during failure-injection checks.
+- [ ] Summary and embedding requests respect configured timeout/retry envelopes during upstream degradation.
+
+### Track B: Repair FTS integrity and hybrid readiness (P0/P1)
+
+**Goal:** Restore lexical index integrity and re-enable hybrid retrieval behind measurable canary gates.
+
+**B1. FTS repair tooling**
+
+- [x] Add one-time FTS rebuild script (truncate/rebuild `messages_fts` from `messages`).  
+  Implemented: `scripts/rebuild-messages-fts.mjs`
+- [x] Add an integrity check script: total rows, distinct message IDs, duplicate ratio.  
+  Implemented: `scripts/fts-integrity-check.mjs`
+
+**B2. Integrity execution and hybrid canary setup**
+
+- [x] Run FTS rebuild on current DB and validate duplicate ratio target (`1.0` rows per message).  
+  Result: PASS (`messages_fts` rows/message ratio now `1.0`, duplicate extra rows `0`)
+- [x] After integrity pass, canary-enable `RAG_HYBRID=true` in local/staging.  
+  Local canary set in `.env.local`
+
+**B3. Canary measurement gate**
+
+- [ ] Collect 24h metrics and compare latency/quality before wider enablement.  
+  Baseline report added: `scripts/memory-canary-report.mjs` (run after 24h window)
+
+**Track B patch log (2026-02-07)**
+
+- FTS integrity checker: `scripts/fts-integrity-check.mjs`
+- FTS rebuild utility: `scripts/rebuild-messages-fts.mjs`
+- Canary metrics report: `scripts/memory-canary-report.mjs`
+- Script wiring for repeatable execution: `package.json`
+
+**Track B validation notes**
+
+- FTS repair/integrity scripts are present and runnable via package scripts.
+- Latest documented integrity run passed with duplicate ratio target achieved.
+- 24h hybrid canary comparison is still pending and remains the release gate for broader enablement.
+
+**Track B exit criteria**
+
+- [ ] `messages_fts` duplicate extra rows remain `0` across repeated integrity checks.
+- [ ] 24h canary with `RAG_HYBRID=true` shows no p95 latency regression beyond agreed tolerance.
+- [ ] Retrieval quality metrics are equal or improved before rollout beyond canary scope.
+
+### Track C: Make summaries/profile operationally reliable (P1)
+
+**Goal:** Make summary/profile behavior deterministic, observable, and consent-safe before enabling broader memory features.
+
+**C1. Observability and state model**
+
+- [x] Define summary job states (`queued`, `running`, `succeeded`, `failed`, `skipped_no_consent`) and emit structured events.
+- [x] Persist per-conversation summary health fields (`last_run_at`, `last_success_at`, `last_error`, `consecutive_failures`).
+- [x] Expose summary health in a runtime endpoint/metrics surface (success rate, failure rate, retries, current backlog).
+
+**C2. Reliability controls**
+
+- [x] Add bounded queueing and per-conversation locking so summary jobs are serialized and not duplicated.
+- [x] Implement retry/backoff policy with hard timeout, capped attempts, and terminal-failure recording.
+- [x] Add a simple circuit-breaker mode that pauses new summary work during repeated upstream LLM failures.
+- [x] Enforce consent at enqueue and execute time; on revocation, clear profile-derived fields and block new summary writes.
+
+**C3. Verification and release gates**
+
+- [x] Add integration test: summary row is persisted after N assistant turns (including process restart resilience).  
+  Added: `__tests__/memory.track-c.test.ts`
+- [x] Add integration test: transient summary failure recovers and eventually persists summary on retry.  
+  Added: `__tests__/memory.track-c.test.ts`
+- [x] Add integration test: consent revocation clears profile data and excludes profile memory from retrieval context.  
+  Added: `__tests__/memory.track-c.test.ts`
+- [x] Add a canary report for 24h runtime showing summary/profile reliability KPIs and failure causes.  
+  Updated: `scripts/memory-canary-report.mjs`
+
+**Track C patch log (2026-02-07)**
+
+- Schema/migration: `app/lib/memory/migrations/014_summary_operational_health.sql`
+- Types/contracts: `app/lib/memory/schemas.ts`
+- Core runtime controls: `app/lib/memory/index.ts`
+- Storage instrumentation and summary health queries: `app/lib/memory/storage/sqlite.ts`
+- Memory config controls (queue/retry/circuit): `app/lib/memory/config.ts`
+- Ops visibility endpoint: `app/api/memory/ops/route.ts`
+- Consent revocation enforcement path: `app/api/memory/consent/route.ts`
+- Storage singleton/db-path alignment: `app/lib/memory/storage/index.ts`
+- Integration tests: `__tests__/memory.track-c.test.ts`
+- Canary reliability reporting: `scripts/memory-canary-report.mjs`
+
+**Track C validation notes**
+
+- Lint on modified Track C files: pass.
+- Track C integration tests: **3/3 passing** (after `npm rebuild better-sqlite3` to compile native bindings for current Node v23.3.0).
+- Exit criteria remain open until 24h canary reliability targets are measured in a healthy runtime.
+
+**Track C exit criteria**
+
+- [ ] Summary success rate >= `99%` over a 24h canary window.
+- [ ] Zero summary/profile writes when consent is disabled.
+- [ ] Every profile change is attributable to a logged summary event with timestamp and conversation ID.
+
+### Track D: Complete missing roadmap features (P2)
+
+**Goal:** Enable chunk-level memory retrieval and operator controls so memory quality can scale without uncontrolled prompt growth.
+
+**D1. Chunk schema and chunking pipeline**
+
+- [x] Implement chunking migration and chunk schema for memory messages.
+- [x] Implement `chunkMessage()` with code/prose chunk kinds.
+
+**D2. Retrieval and context assembly**
+
+- [x] Implement chunk embedding + chunk retrieval path.
+- [x] Add chunk-aware context assembly with strict token budget.
+
+**D3. Runtime controls and UX**
+
+- [x] Build `/api/memory/preferences` and wire memory settings in toolbar.
+
+**Track D patch log (2026-02-07)**
+
+- Chunk schema migration: `app/lib/memory/migrations/015_message_chunking.sql`
+- Chunking utility: `app/lib/memory/chunking.ts`
+- Chunk persistence and row types: `app/lib/memory/storage/sqlite.ts`
+- Chunk embedding + chunk metadata retrieval: `app/lib/memory/rag/retrieval.ts`
+- Chunk-aware context assembly and ingest wiring: `app/lib/memory/rag/index.ts`
+- Retrieval schema expansion for chunk metadata: `app/lib/memory/schemas.ts`
+- Runtime preference helpers: `app/lib/memory/preferences.ts`
+- Preference API endpoint: `app/api/memory/preferences/route.ts`
+- Memory init preference bootstrap + context call-through: `app/lib/memory/index.ts`
+- Request-time preference propagation: `app/api/llm/route.ts`, `components/Chat.tsx`
+- Toolbar controls for hybrid/chunking/token budget/summary frequency: `components/LeftToolbar.tsx`
+
+**Track D validation notes**
+
+- Lint on modified Track D files: pass.
+- Type-check: no Track D-specific type errors (pre-existing esModuleInterop issues unrelated to Track D).
+- Migration 015 applied to live DB (2026-02-07): `message_chunks`, `chunks_fts` tables created.
+- Preferences API (`/api/memory/preferences`) verified: GET/POST routes present and well-formed.
+- Full repository type-check still fails due pre-existing unrelated issues in case routes/pages and legacy scripts; no new Track D-specific type errors surfaced during lint validation.
+
+### Track E: Validate and ship safely (P2)
+
+**Goal:** Establish objective release gates for memory performance and a deterministic rollback path.
+
+**E1. Performance SLO targets**
+
+- [x] Define SLO targets for memory retrieval latency (avg, p95, p99).  
+  Targets (24h canary): `avg <= 180ms`, `p95 <= 450ms`, `p99 <= 700ms`
+
+**E2. Benchmark and release artifacts**
+
+- [x] Add benchmark script for dense-only vs hybrid vs chunked retrieval.  
+  Added: `scripts/memory-retrieval-benchmark.mjs`, `npm run memory:benchmark:retrieval`
+- [x] Add release checklist with rollback toggles for each memory feature.  
+  Added: `docs/audits/MEMORY_RELEASE_CHECKLIST.md`
+
+**E3. Operational defaults documentation**
+
+- [x] Document final defaults in `docs/STARTUP.md` and memory README.
+
+**Track E patch log (2026-02-07)**
+
+- Retrieval benchmark script: `scripts/memory-retrieval-benchmark.mjs`
+- Benchmark script wiring: `package.json`
+- Release checklist + rollback playbook: `docs/audits/MEMORY_RELEASE_CHECKLIST.md`
+- Startup defaults and benchmark commands: `docs/STARTUP.md`
+- Memory README defaults and Track E gate commands: `app/lib/memory/README.md`
+
+**Track E validation notes**
+
+- Lint on Track E modified files: pass.
+- Benchmark script verified: `npm run memory:benchmark:retrieval` executes and reports dense/hybrid/chunked modes with SLO evaluation.
+- FTS integrity script verified: `npm run memory:fts:check` passes (duplicate ratio 1.0).
+- Canary report script verified: `npm run memory:canary:report` now reports summary/profile reliability KPIs (after migration 014 applied).
+- Migration 014 applied to live DB (2026-02-07): `summary_health`, `summary_events` tables created.
+- Full repository type-check still has unrelated pre-existing failures (case routes/pages and legacy scripts); Track E changes are documentation + script additions and do not introduce new lint failures.
 
 ---
 
-## Success Criteria (Overall)
+## 7) Immediate Next Actions (Recommended Order)
 
-### Functional Requirements
-- [x] **Phase 1:** Metrics collection working (retrieval_metrics table populated)
-- [x] **Phase 2:** Summaries generate automatically every N messages
-- [x] **Phase 2:** Profile only used with consent
-- [ ] **Phase 3:** Hybrid retrieval includes both dense and FTS results
-- [ ] **Phase 4:** Chunking preserves code blocks intact
-- [ ] **Phase 4:** Token budget never exceeded by >5%
-- [ ] **Phase 5:** User settings UI functional
-
-### Performance Requirements
-- [x] **Phase 1:** Baseline metrics established
-- [ ] **Phase 3:** Retrieval latency p95 < 200ms (hybrid on)
-- [ ] **Phase 3:** Code identifier recall improves >20%
-- [ ] **Phase 4:** Embedding generation < 500ms per message
-- [ ] **Phase 4:** Context truncation reduced >50%
-- [ ] **Phase 5:** FTS index size < 50% of message table size
-
-### Quality Requirements
-- [x] **Phase 1:** Zero privacy violations (consent gating works)
-- [x] **Phase 2:** Consent enforcement implemented and tested
-- [ ] **Phase 2:** User survey: >80% find summaries helpful (pending live testing)
-- [ ] **Phase 3:** Reranking improves result relevance measurably
-- [ ] **Phase 4:** Chunking doesn't degrade retrieval quality
-- [ ] **Phase 5:** All features work correctly together
+1. Complete **Track A** and **Track B** before enabling any additional features.  
+2. Verify summary reliability from **Track C** in the active runtime.  
+3. Run **Track D** canary with chunking enabled and collect chunk vs non-chunk retrieval quality/latency deltas.  
+4. Use **Track E** as release gate before broad rollout.
 
 ---
 
-## Risk Management
+## 8) Status Summary
 
-### Identified Risks
-
-| Risk | Phase | Mitigation | Status |
-|------|-------|------------|--------|
-| Ollama/Chroma unavailable | All | Graceful degradation implemented | ✅ Handled |
-| Metrics logging failures | 1 | Async, non-blocking, try-catch | ✅ Handled |
-| FTS index corruption | 3 | Rebuild script + fallback to dense-only | Documented |
-| Chunking degrades quality | 4 | Keep full message embeddings as fallback | Planned |
-| Token budget too restrictive | 4 | Configurable, monitored via metrics | Planned |
-| User settings conflicts with env vars | 5 | Clear precedence: user > env > defaults | Planned |
-
-### Rollback Plan
-
-Each phase can be rolled back independently:
-
-1. **Phase 1:** Don't query `/api/memory/metrics` (system works as before)
-2. **Phase 2:** Set `RAG_SUMMARY_FREQUENCY=0` to disable
-3. **Phase 3:** Set `RAG_HYBRID=false` to revert to dense-only
-4. **Phase 4:** Set `RAG_CHUNKING=false` to use full messages
-5. **Phase 5:** User settings persist, can be reset individually
-
----
-
-## Next Immediate Action
-
-**Phase 2 Testing & Validation (2026-01-20):**
-1. Start Ollama and ChromaDB services
-2. Run full test suite: `npx tsx scripts/test-phase2-summaries.ts`
-3. Manually test profile UI in browser
-4. Verify summaries generate after 5 messages
-5. Collect user feedback
-6. Mark Phase 2 as production-ready
-
-**Then: Begin Phase 3 Planning:**
-1. Analyze Phase 1 metrics for baseline
-2. Design FTS index schema
-3. Plan reranking algorithm implementation
-
----
-
-## Questions & Decisions Log
-
-### Decided
-- ✅ **2026-01-18:** Summary trigger = Automatic every 5 messages (configurable)
-- ✅ **2026-01-18:** Token budget default = 1000 tokens
-- ✅ **2026-01-18:** Feature flags = Env vars initially, user prefs in Phase 5
-- ✅ **2026-01-18:** Rerank coefficients = α=0.6, β=0.3, γ=0.1 (to be tuned)
-- ✅ **2026-01-18:** Metrics retention = 30 days
-- ✅ **2026-01-20:** Profile UI = Integrated into LeftToolbar (expandable section)
-- ✅ **2026-01-20:** Summary uses Ollama API (/api/generate) for generation
-
-### Open
-- ❓ Phase 3: Should FTS index exclude system messages? (Yes, for privacy)
-- ❓ Phase 4: Should backfill be automatic or manual? (Manual, safer)
-
----
-
-**Last Updated:** 2026-01-20
-**Maintainer:** Implementation team
-**Related Docs:** [CONTEXT.md](CONTEXT.md), [TOOLBAR.md](TOOLBAR.md), [PHASE1_COMPLETE.md](PHASE1_COMPLETE.md)
+- Legacy roadmap content was useful but not fully carried over.
+- Current OrthoAI memory system is **partially integrated**.
+- The fastest path back on track is:
+  - stabilize existing paths,
+  - fix FTS integrity,
+  - prove summaries/profile reliability,
+  - validate chunking/preferences under canary load before broad enablement.

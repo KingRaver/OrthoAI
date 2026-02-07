@@ -344,16 +344,20 @@ Create or update `.env.local`:
 
 ```env
 # Memory System - Database Paths
-MEMORY_DB_PATH=./.data/hackerreign.db
+MEMORY_DB_PATH=./.data/orthoai.db
 CHROMA_DB_PATH=./.data/chroma
 CHROMA_HOST=localhost
 CHROMA_PORT=8000
 
-# Memory System - Phase 1-3 Feature Flags (ENABLED)
-RAG_HYBRID=true                  # Phase 3: Hybrid retrieval (dense + FTS5/BM25)
-RAG_CHUNKING=false               # Phase 4: Message chunking (future)
+# Memory System - Track E Release Defaults
+RAG_HYBRID=true                  # Hybrid retrieval (dense + FTS5/BM25)
+RAG_CHUNKING=true                # Chunk retrieval pipeline
 RAG_TOKEN_BUDGET=1000            # Max tokens for memory context
-RAG_SUMMARY_FREQUENCY=5          # Auto-summarize every N messages (Phase 2)
+RAG_SUMMARY_FREQUENCY=5          # Auto-summarize every N messages
+RAG_METRICS_ENABLED=true         # Retrieval metrics collection
+RAG_METRICS_SAMPLE_RATE=0.25     # Sampled metrics writes
+RAG_SEARCH_QUERY_LOGGING=true    # Search query analytics
+RAG_SEARCH_QUERY_SAMPLE_RATE=0.1 # Sampled search-query writes
 RAG_RERANK_ALPHA=0.6            # Dense (semantic) search weight
 RAG_RERANK_BETA=0.3             # BM25 (lexical) search weight
 RAG_RERANK_GAMMA=0.1            # Code identifier match weight
@@ -367,6 +371,19 @@ OLLAMA_EMBED_MODEL=nomic-embed-text
 RAG_TOP_K=5
 RAG_SIMILARITY_THRESHOLD=0.3
 ```
+
+### Track E release gate commands
+
+```bash
+# 24h runtime reliability report
+npm run memory:canary:report -- --hours=24
+
+# Dense-only vs hybrid vs chunked latency benchmark
+npm run memory:benchmark:retrieval -- --hours=24 --min-samples=20
+```
+
+Release checklist and rollback toggles:
+- `docs/audits/MEMORY_RELEASE_CHECKLIST.md`
 
 ### 3. Pull Embedding Model
 

@@ -4,6 +4,8 @@
 import { getStorage } from './index';
 import { getMemoryConfig } from './config';
 import { createHash } from 'crypto';
+import { recordMemoryFailure, recordMemorySuccess } from './ops';
+import { memoryDebug } from './debug';
 
 /**
  * Retrieval metrics schema (matches CONTEXT.MD specification)
@@ -38,6 +40,14 @@ export interface RetrievalMetrics {
  */
 export async function logRetrievalMetrics(metrics: RetrievalMetrics): Promise<void> {
   try {
+    const config = getMemoryConfig();
+    if (!config.retrievalMetricsEnabled) {
+      return;
+    }
+    if (Math.random() > config.retrievalMetricsSampleRate) {
+      return;
+    }
+
     const storage = getStorage();
     const id = generateMetricId(metrics);
 
@@ -73,10 +83,14 @@ export async function logRetrievalMetrics(metrics: RetrievalMetrics): Promise<vo
       metrics.flags.tokenBudget
     );
 
-    console.log(`[Metrics] Logged retrieval: ${metrics.latency.totalMs}ms, ${getTotalResults(metrics)} results`);
+    memoryDebug(
+      `[Metrics] Logged retrieval: ${metrics.latency.totalMs}ms, ${getTotalResults(metrics)} results`
+    );
+    recordMemorySuccess('metrics');
   } catch (error) {
     // Don't throw - metrics logging should never break the app
     console.warn('[Metrics] Failed to log retrieval metrics:', error);
+    recordMemoryFailure('metrics', 'logRetrievalMetrics', error);
   }
 }
 
@@ -99,7 +113,9 @@ export async function cleanupOldMetrics(): Promise<number> {
     const deleted = result.changes || 0;
 
     if (deleted > 0) {
-      console.log(`[Metrics] Cleaned up ${deleted} old metrics (older than ${config.metricsRetentionDays} days)`);
+      memoryDebug(
+        `[Metrics] Cleaned up ${deleted} old metrics (older than ${config.metricsRetentionDays} days)`
+      );
     }
 
     return deleted;

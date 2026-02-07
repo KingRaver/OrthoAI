@@ -2,9 +2,12 @@
 // Chroma vector database integration for semantic search
 
 import { ChromaClient, type Metadata, type Where } from 'chromadb';
-import { RetrievalResult, Message } from '../schemas';
+import { RetrievalResult, Message, MessageChunk } from '../schemas';
 import { LocalEmbeddings } from './embeddings';
 import { getStorage } from '../storage';
+import { getMemoryConfig } from '../config';
+import { memoryDebug } from '../debug';
+import { recordMemoryFailure, recordMemorySuccess } from '../ops';
 
 let sharedChromaClient: ChromaClient | null = null;
 
@@ -26,6 +29,11 @@ type RagMetadata = Metadata & {
   model_used?: string | null;
   message_length?: number | null;
   content_type?: RagContentType | null;
+  parent_message_id?: string | null;
+  chunk_index?: number | null;
+  chunk_kind?: 'code' | 'prose' | null;
+  chunk_language?: string | null;
+  token_estimate?: number | null;
 };
 
 /**
@@ -79,24 +87,24 @@ export class ChromaRetrieval {
         storedMeta.embedding_dimension !== currentMeta.embedding_dimension;
 
       if (needsRebuild) {
-        console.log('[ChromaRetrieval] Stored collection metadata:', storedMeta || 'none');
-        console.log('[ChromaRetrieval] Current collection metadata:', currentMeta);
-        console.log('[ChromaRetrieval] Collection metadata mismatch or missing; rebuilding collection...');
+        memoryDebug('[ChromaRetrieval] Stored collection metadata:', storedMeta || 'none');
+        memoryDebug('[ChromaRetrieval] Current collection metadata:', currentMeta);
+        memoryDebug('[ChromaRetrieval] Collection metadata mismatch or missing; rebuilding collection...');
         try {
           await this.client.deleteCollection({ name: this.collectionName });
         } catch {
           // Collection might not exist, continue
         }
       } else {
-        console.log('[ChromaRetrieval] Stored collection metadata:', storedMeta);
-        console.log('[ChromaRetrieval] Current collection metadata:', currentMeta);
+        memoryDebug('[ChromaRetrieval] Stored collection metadata:', storedMeta);
+        memoryDebug('[ChromaRetrieval] Current collection metadata:', currentMeta);
         // If metadata matches, keep the existing collection if it exists
         try {
           await this.client.getCollection({ name: this.collectionName });
-          console.log('[ChromaRetrieval] Existing collection found, keeping it.');
+          memoryDebug('[ChromaRetrieval] Existing collection found, keeping it.');
           return;
         } catch {
-          console.log('[ChromaRetrieval] Existing collection not found, creating new...');
+          memoryDebug('[ChromaRetrieval] Existing collection not found, creating new...');
         }
       }
 
@@ -113,7 +121,7 @@ export class ChromaRetrieval {
       });
 
       storage.setPreference('rag_collection_meta', currentMeta);
-      console.log(`[ChromaRetrieval] Collection '${this.collectionName}' ready`);
+      memoryDebug(`[ChromaRetrieval] Collection '${this.collectionName}' ready`);
     } catch (error) {
       console.error('[ChromaRetrieval] Error initializing collection:', error);
       throw error;
@@ -152,8 +160,10 @@ export class ChromaRetrieval {
         ],
       });
 
-      console.log(`[ChromaRetrieval] Added message ${message.id} to Chroma`);
+      recordMemorySuccess('embedding');
+      memoryDebug(`[ChromaRetrieval] Added message ${message.id} to Chroma`);
     } catch (error) {
+      recordMemoryFailure('embedding', 'ChromaRetrieval.addMessageEmbedding', error);
       console.error('[ChromaRetrieval] Error adding message embedding:', error);
       throw error;
     }
@@ -197,9 +207,61 @@ export class ChromaRetrieval {
         metadatas,
       });
 
-      console.log(`[ChromaRetrieval] Added ${messages.length} messages to Chroma`);
+      recordMemorySuccess('embedding');
+      memoryDebug(`[ChromaRetrieval] Added ${messages.length} messages to Chroma`);
     } catch (error) {
+      recordMemoryFailure('embedding', 'ChromaRetrieval.addMessageEmbeddingsBatch', error);
       console.error('[ChromaRetrieval] Error adding batch embeddings:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Add chunk embeddings for a message
+   */
+  async addMessageChunkEmbeddings(
+    chunks: MessageChunk[],
+    parentRole: Message['role'] = 'assistant'
+  ): Promise<void> {
+    try {
+      if (chunks.length === 0) return;
+
+      const contents = chunks.map(chunk => chunk.content);
+      const embeddings = await this.embeddings.embedBatch(contents);
+      const ids = chunks.map(chunk => chunk.id);
+      const metadatas = chunks.map(chunk => ({
+        conversation_id: chunk.conversation_id,
+        role: parentRole,
+        created_at: chunk.created_at,
+        message_length: chunk.content.length,
+        content_type: 'message_chunk' as const,
+        parent_message_id: chunk.parent_message_id,
+        chunk_index: chunk.chunk_index,
+        chunk_kind: chunk.chunk_kind,
+        chunk_language: chunk.language ?? null,
+        token_estimate: chunk.token_estimate,
+      }));
+
+      const collection = await this.client.getCollection({
+        name: this.collectionName,
+        embeddingFunction: undefined,
+      });
+
+      try {
+        await collection.delete({ ids });
+      } catch {
+        // Ignore missing IDs during refresh
+      }
+
+      await collection.add({
+        ids,
+        embeddings,
+        documents: contents,
+        metadatas,
+      });
+    } catch (error) {
+      recordMemoryFailure('embedding', 'ChromaRetrieval.addMessageChunkEmbeddings', error);
+      console.error('[ChromaRetrieval] Error adding chunk embeddings:', error);
       throw error;
     }
   }
@@ -239,16 +301,25 @@ export class ChromaRetrieval {
       // Log search for analytics
       const storage = getStorage();
       const topScore = (results.distances?.[0]?.[0] || 0);
-      storage.logSearchQuery(
-        query,
-        results.ids?.[0]?.length || 0,
-        topScore,
-        responseTime
-      );
+      const config = getMemoryConfig();
+      if (
+        config.searchQueryLoggingEnabled &&
+        Math.random() <= config.searchQueryLoggingSampleRate
+      ) {
+        storage.logSearchQuery(
+          query,
+          results.ids?.[0]?.length || 0,
+          topScore,
+          responseTime
+        );
+      }
+      const filterScope = filters ? JSON.stringify(filters) : 'global';
 
       // Transform results
       if (!results.ids?.[0] || results.ids[0].length === 0) {
-        console.log('[ChromaRetrieval] No results found for query');
+        memoryDebug(
+          `[ChromaRetrieval] No semantic results (collection: ${this.collectionName}, filters: ${filterScope})`
+        );
         return [];
       }
 
@@ -288,10 +359,35 @@ export class ChromaRetrieval {
             : undefined;
 
         if (contentType !== 'message') {
+          const chunkKind =
+            entry.metadata.chunk_kind === 'code' || entry.metadata.chunk_kind === 'prose'
+              ? entry.metadata.chunk_kind
+              : undefined;
+          const chunkIndex =
+            typeof entry.metadata.chunk_index === 'number'
+              ? entry.metadata.chunk_index
+              : undefined;
+          const tokenEstimate =
+            typeof entry.metadata.token_estimate === 'number'
+              ? entry.metadata.token_estimate
+              : undefined;
+          const parentMessageId =
+            typeof entry.metadata.parent_message_id === 'string'
+              ? entry.metadata.parent_message_id
+              : undefined;
+          const chunkLanguage =
+            typeof entry.metadata.chunk_language === 'string'
+              ? entry.metadata.chunk_language
+              : undefined;
+          const role =
+            entry.metadata.role === 'assistant' || entry.metadata.role === 'user'
+              ? entry.metadata.role
+              : 'system';
+
           const syntheticMessage: Message = {
             id: entry.messageId,
             conversation_id: conversationId ?? 'profile',
-            role: 'system',
+            role,
             content: entry.document,
             created_at: createdAt ?? new Date().toISOString(),
           };
@@ -301,6 +397,11 @@ export class ChromaRetrieval {
             similarity_score: similarity,
             conversation_summary: conversationId,
             content_type: contentType,
+            parent_message_id: parentMessageId,
+            chunk_index: chunkIndex,
+            chunk_kind: chunkKind,
+            chunk_language: chunkLanguage,
+            token_estimate: tokenEstimate,
           });
           continue;
         }
@@ -316,12 +417,13 @@ export class ChromaRetrieval {
         }
       }
 
-      console.log(
-        `[ChromaRetrieval] Found ${retrievalResults.length} results (${responseTime}ms)`
+      memoryDebug(
+        `[ChromaRetrieval] Found ${retrievalResults.length} semantic results (${responseTime}ms, collection: ${this.collectionName}, filters: ${filterScope})`
       );
 
       return retrievalResults;
     } catch (error) {
+      recordMemoryFailure('retrieval', 'ChromaRetrieval.search', error);
       console.error('[ChromaRetrieval] Error searching:', error);
       throw error;
     }
@@ -337,7 +439,7 @@ export class ChromaRetrieval {
       conversation_id?: string;
       role?: 'user' | 'assistant';
       dateRange?: { from: Date; to: Date };
-      content_type?: 'message' | 'conversation_summary' | 'user_profile' | 'knowledge_chunk';
+      content_type?: 'message' | 'message_chunk' | 'conversation_summary' | 'user_profile' | 'knowledge_chunk';
     },
     topK?: number
   ): Promise<RetrievalResult[]> {
@@ -431,7 +533,7 @@ export class ChromaRetrieval {
       });
 
       await collection.delete({ ids: [messageId] });
-      console.log(`[ChromaRetrieval] Deleted message ${messageId}`);
+      memoryDebug(`[ChromaRetrieval] Deleted message ${messageId}`);
     } catch (error) {
       console.error('[ChromaRetrieval] Error deleting message:', error);
       throw error;
@@ -454,7 +556,7 @@ export class ChromaRetrieval {
 
       if (results.ids && results.ids.length > 0) {
         await collection.delete({ ids: results.ids });
-        console.log(
+        memoryDebug(
           `[ChromaRetrieval] Deleted ${results.ids.length} embeddings for conversation ${conversationId}`
         );
       }
@@ -495,7 +597,7 @@ export class ChromaRetrieval {
     try {
       await this.client.deleteCollection({ name: this.collectionName });
       await this.initialize();
-      console.log(`[ChromaRetrieval] Collection cleared and reinitialized`);
+      memoryDebug(`[ChromaRetrieval] Collection cleared and reinitialized`);
     } catch (error) {
       console.error('[ChromaRetrieval] Error clearing collection:', error);
       throw error;
@@ -515,6 +617,7 @@ export class ChromaRetrieval {
     try {
       const storage = getStorage();
       const db = storage.getDatabase();
+      const config = getMemoryConfig();
 
       // Build FTS query - escape special characters
       const normalized = query.replace(/[_]+/g, ' ');
@@ -527,7 +630,7 @@ export class ChromaRetrieval {
         .join(' OR ');
 
       if (!ftsQuery) {
-        console.log('[ChromaRetrieval] FTS query too short, returning empty results');
+        memoryDebug('[ChromaRetrieval] FTS query too short, returning empty results');
         return [];
       }
 
@@ -566,8 +669,8 @@ export class ChromaRetrieval {
         bm25_score: number;
       }>;
 
-      // Transform to RetrievalResult format
-      const results: RetrievalResult[] = [];
+      // Transform message results to RetrievalResult format
+      const messageResults: RetrievalResult[] = [];
       const messageIds = rows.map(row => row.message_id);
       const messagesById = new Map(
         storage.getMessagesByIds(messageIds).map(msg => [msg.id, msg])
@@ -581,7 +684,7 @@ export class ChromaRetrieval {
           ? 1
           : 1 / (1 + row.bm25_score);
 
-        results.push({
+        messageResults.push({
           message: fullMessage,
           similarity_score: normalizedScore,
           conversation_summary: row.conversation_id,
@@ -590,12 +693,92 @@ export class ChromaRetrieval {
         });
       }
 
-      console.log(
-        `[ChromaRetrieval] FTS search found ${results.length} results for query: "${ftsQuery}"`
+      const chunkResults: RetrievalResult[] = [];
+      if (config.ragChunking) {
+        try {
+          let chunkSql = `
+            SELECT
+              c.id AS chunk_id,
+              c.parent_message_id,
+              c.conversation_id,
+              c.chunk_index,
+              c.chunk_kind,
+              c.language,
+              c.token_estimate,
+              c.content,
+              c.created_at,
+              m.role,
+              bm25(chunks_fts) AS bm25_score
+            FROM chunks_fts
+            INNER JOIN message_chunks c ON c.id = chunks_fts.chunk_id
+            INNER JOIN messages m ON m.id = c.parent_message_id
+            WHERE chunks_fts.content MATCH ?
+          `;
+          const chunkParams: Array<string | number> = [ftsQuery];
+          if (conversationId) {
+            chunkSql += ` AND c.conversation_id = ?`;
+            chunkParams.push(conversationId);
+          }
+          chunkSql += `
+            ORDER BY bm25_score ASC
+            LIMIT ?
+          `;
+          chunkParams.push(limit);
+
+          const chunkRows = db.prepare(chunkSql).all(...chunkParams) as Array<{
+            chunk_id: string;
+            parent_message_id: string;
+            conversation_id: string;
+            chunk_index: number;
+            chunk_kind: 'code' | 'prose';
+            language: string | null;
+            token_estimate: number;
+            content: string;
+            created_at: string;
+            role: Message['role'];
+            bm25_score: number;
+          }>;
+
+          for (const row of chunkRows) {
+            const normalizedScore = row.bm25_score <= 0
+              ? 1
+              : 1 / (1 + row.bm25_score);
+            chunkResults.push({
+              message: {
+                id: row.chunk_id,
+                conversation_id: row.conversation_id,
+                role: row.role,
+                content: row.content,
+                created_at: row.created_at,
+              },
+              similarity_score: normalizedScore,
+              conversation_summary: row.conversation_id,
+              content_type: 'message_chunk',
+              parent_message_id: row.parent_message_id,
+              chunk_index: row.chunk_index,
+              chunk_kind: row.chunk_kind,
+              chunk_language: row.language ?? undefined,
+              token_estimate: row.token_estimate,
+              fts_score: row.bm25_score,
+            });
+          }
+        } catch (chunkError) {
+          console.warn('[ChromaRetrieval] Chunk FTS search unavailable:', chunkError);
+        }
+      }
+
+      const merged = [...messageResults, ...chunkResults]
+        .sort((a, b) => b.similarity_score - a.similarity_score)
+        .slice(0, limit);
+
+      memoryDebug(
+        `[ChromaRetrieval] FTS search found ${merged.length} results for query: "${ftsQuery}"` +
+        ` (messages=${messageResults.length}, chunks=${chunkResults.length})`
       );
 
-      return results;
+      return merged;
     } catch (error) {
+      recordMemoryFailure('retrieval', 'ChromaRetrieval.ftsSearch', error);
       console.error('[ChromaRetrieval] FTS search error:', error);
       // Graceful fallback - return empty results if FTS unavailable
       return [];

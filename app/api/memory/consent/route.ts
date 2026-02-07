@@ -16,13 +16,7 @@ export async function POST(req: NextRequest) {
 
   const { consent } = await req.json();
   const consentValue = Boolean(consent);
-
-  if (!consentValue) {
-    await memory.clearUserProfile();
-    memory.setProfileConsent(false);
-  } else {
-    memory.setProfileConsent(true);
-  }
+  await memory.updateProfileConsent(consentValue);
 
   return NextResponse.json({ consent: consentValue });
 }

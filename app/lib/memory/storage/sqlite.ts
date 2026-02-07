@@ -12,6 +12,12 @@ import {
   Session,
   ConversationSummary,
   UserProfile,
+  MessageChunk,
+  MessageChunkKind,
+  SummaryJobState,
+  SummaryHealthRecord,
+  SummaryEventRecord,
+  SummaryHealthSnapshot,
 } from '../schemas';
 
 type PreferenceValue = string | number | boolean | null | object;
@@ -41,6 +47,18 @@ type MessageRow = {
   code_identifiers: string | null;
 };
 
+type MessageChunkRow = {
+  id: string;
+  parent_message_id: string;
+  conversation_id: string;
+  chunk_index: number;
+  chunk_kind: MessageChunkKind;
+  content: string;
+  language: string | null;
+  token_estimate: number;
+  created_at: string;
+};
+
 type UserPreferenceRow = {
   key: string;
   value: string;
@@ -65,6 +83,30 @@ type UserProfileRow = {
   content_hash: string | null;
   embedding_status: UserProfile['embedding_status'];
   error_message: string | null;
+};
+
+type SummaryHealthRow = {
+  conversation_id: string;
+  last_state: SummaryJobState;
+  last_run_at: string | null;
+  last_success_at: string | null;
+  last_error: string | null;
+  consecutive_failures: number;
+  total_runs: number;
+  total_successes: number;
+  total_failures: number;
+  total_retries: number;
+  updated_at: string;
+};
+
+type SummaryEventRow = {
+  id: string;
+  conversation_id: string;
+  state: SummaryJobState;
+  attempt: number;
+  error_message: string | null;
+  metadata: string | null;
+  created_at: string;
 };
 
 type EmbeddingMetadataRow = {
@@ -460,6 +502,67 @@ export class SQLiteStorage {
   }
 
   /**
+   * CHUNKING: Replace all chunks for a message
+   */
+  replaceMessageChunks(
+    parentMessageId: string,
+    chunks: Array<Omit<MessageChunk, 'created_at'>>
+  ): MessageChunk[] {
+    const deleteStmt = this.db.prepare(`
+      DELETE FROM message_chunks WHERE parent_message_id = ?
+    `);
+    const insertStmt = this.db.prepare(`
+      INSERT INTO message_chunks
+      (id, parent_message_id, conversation_id, chunk_index, chunk_kind, content, language, token_estimate, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    const tx = this.db.transaction((messageId: string, nextChunks: Array<Omit<MessageChunk, 'created_at'>>) => {
+      deleteStmt.run(messageId);
+      const now = new Date().toISOString();
+      for (const chunk of nextChunks) {
+        insertStmt.run(
+          chunk.id,
+          chunk.parent_message_id,
+          chunk.conversation_id,
+          chunk.chunk_index,
+          chunk.chunk_kind,
+          chunk.content,
+          chunk.language || null,
+          chunk.token_estimate,
+          now
+        );
+      }
+    });
+
+    tx(parentMessageId, chunks);
+    return this.getMessageChunks(parentMessageId);
+  }
+
+  /**
+   * CHUNKING: Read all chunks for a parent message
+   */
+  getMessageChunks(parentMessageId: string): MessageChunk[] {
+    const stmt = this.db.prepare(`
+      SELECT * FROM message_chunks
+      WHERE parent_message_id = ?
+      ORDER BY chunk_index ASC
+    `);
+    const rows = stmt.all(parentMessageId) as MessageChunkRow[];
+    return rows.map(row => ({
+      id: row.id,
+      parent_message_id: row.parent_message_id,
+      conversation_id: row.conversation_id,
+      chunk_index: row.chunk_index,
+      chunk_kind: row.chunk_kind,
+      content: row.content,
+      language: row.language ?? undefined,
+      token_estimate: row.token_estimate,
+      created_at: row.created_at,
+    }));
+  }
+
+  /**
    * UPDATE: Update conversation
    */
   updateConversation(conversationId: string, updates: Partial<Conversation>): void {
@@ -659,6 +762,237 @@ export class SQLiteStorage {
       WHERE conversation_id = ?
     `);
     stmt.run(status, errorMessage || null, conversationId);
+  }
+
+  /**
+   * SUMMARY: Record summary state transition and update per-conversation health
+   */
+  recordSummaryState(
+    conversationId: string,
+    state: SummaryJobState,
+    options?: {
+      attempt?: number;
+      errorMessage?: string;
+      metadata?: Record<string, unknown>;
+      countAsRetry?: boolean;
+      countAsFailure?: boolean;
+    }
+  ): void {
+    const now = new Date().toISOString();
+    const attempt = Number.isFinite(options?.attempt)
+      ? Math.max(1, Number(options?.attempt))
+      : 1;
+    const errorMessage = options?.errorMessage || null;
+    const metadata = options?.metadata ? JSON.stringify(options.metadata) : null;
+    const retryIncrement = options?.countAsRetry ? 1 : 0;
+    const failureIncrement = options?.countAsFailure === false ? 0 : 1;
+
+    this.db.prepare(`
+      INSERT OR IGNORE INTO summary_health (conversation_id, last_state, updated_at)
+      VALUES (?, 'queued', ?)
+    `).run(conversationId, now);
+
+    this.db.prepare(`
+      INSERT INTO summary_events (id, conversation_id, state, attempt, error_message, metadata, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(this.generateId('sumevt'), conversationId, state, attempt, errorMessage, metadata, now);
+
+    if (state === 'running') {
+      this.db.prepare(`
+        UPDATE summary_health
+        SET
+          last_state = 'running',
+          last_run_at = ?,
+          total_runs = total_runs + 1,
+          updated_at = ?
+        WHERE conversation_id = ?
+      `).run(now, now, conversationId);
+      return;
+    }
+
+    if (state === 'succeeded') {
+      this.db.prepare(`
+        UPDATE summary_health
+        SET
+          last_state = 'succeeded',
+          last_success_at = ?,
+          last_error = NULL,
+          consecutive_failures = 0,
+          total_successes = total_successes + 1,
+          updated_at = ?
+        WHERE conversation_id = ?
+      `).run(now, now, conversationId);
+      return;
+    }
+
+    if (state === 'failed') {
+      this.db.prepare(`
+        UPDATE summary_health
+        SET
+          last_state = 'failed',
+          last_error = ?,
+          consecutive_failures = CASE
+            WHEN ? = 1 THEN consecutive_failures + 1
+            ELSE consecutive_failures
+          END,
+          total_failures = total_failures + ?,
+          total_retries = total_retries + ?,
+          updated_at = ?
+        WHERE conversation_id = ?
+      `).run(errorMessage, failureIncrement, failureIncrement, retryIncrement, now, conversationId);
+      return;
+    }
+
+    if (state === 'skipped_no_consent') {
+      this.db.prepare(`
+        UPDATE summary_health
+        SET
+          last_state = 'skipped_no_consent',
+          last_error = ?,
+          updated_at = ?
+        WHERE conversation_id = ?
+      `).run(errorMessage, now, conversationId);
+      return;
+    }
+
+    // queued
+    this.db.prepare(`
+      UPDATE summary_health
+      SET
+        last_state = 'queued',
+        updated_at = ?
+      WHERE conversation_id = ?
+    `).run(now, conversationId);
+  }
+
+  /**
+   * SUMMARY: Read per-conversation summary health
+   */
+  getSummaryHealth(conversationId: string): SummaryHealthRecord | null {
+    const row = this.db.prepare(`
+      SELECT * FROM summary_health WHERE conversation_id = ?
+    `).get(conversationId) as SummaryHealthRow | undefined;
+
+    if (!row) return null;
+
+    return {
+      conversation_id: row.conversation_id,
+      last_state: row.last_state,
+      last_run_at: row.last_run_at ?? undefined,
+      last_success_at: row.last_success_at ?? undefined,
+      last_error: row.last_error ?? undefined,
+      consecutive_failures: row.consecutive_failures,
+      total_runs: row.total_runs,
+      total_successes: row.total_successes,
+      total_failures: row.total_failures,
+      total_retries: row.total_retries,
+      updated_at: row.updated_at,
+    };
+  }
+
+  /**
+   * SUMMARY: Read recent summary events for observability
+   */
+  getSummaryEvents(limit: number = 20, conversationId?: string): SummaryEventRecord[] {
+    const normalizedLimit = Number.isFinite(limit) ? Math.max(1, Math.min(200, limit)) : 20;
+    const rows = conversationId
+      ? this.db.prepare(`
+          SELECT * FROM summary_events
+          WHERE conversation_id = ?
+          ORDER BY created_at DESC
+          LIMIT ?
+        `).all(conversationId, normalizedLimit) as SummaryEventRow[]
+      : this.db.prepare(`
+          SELECT * FROM summary_events
+          ORDER BY created_at DESC
+          LIMIT ?
+        `).all(normalizedLimit) as SummaryEventRow[];
+
+    return rows.map(row => {
+      let parsedMetadata: Record<string, unknown> | undefined;
+      if (row.metadata) {
+        try {
+          parsedMetadata = JSON.parse(row.metadata) as Record<string, unknown>;
+        } catch {
+          parsedMetadata = undefined;
+        }
+      }
+
+      return {
+        id: row.id,
+        conversation_id: row.conversation_id,
+        state: row.state,
+        attempt: row.attempt,
+        error_message: row.error_message ?? undefined,
+        metadata: parsedMetadata,
+        created_at: row.created_at,
+      };
+    });
+  }
+
+  /**
+   * SUMMARY: Aggregate summary reliability snapshot
+   */
+  getSummaryHealthSnapshot(windowHours: number = 24): SummaryHealthSnapshot {
+    const now = new Date();
+    const windowStart = new Date(now.getTime() - Math.max(1, windowHours) * 60 * 60 * 1000);
+
+    const totals = this.db.prepare(`
+      SELECT
+        COUNT(*) as tracked_conversations,
+        COALESCE(SUM(total_runs), 0) as total_runs,
+        COALESCE(SUM(total_successes), 0) as total_successes,
+        COALESCE(SUM(total_failures), 0) as total_failures,
+        COALESCE(SUM(total_retries), 0) as total_retries
+      FROM summary_health
+    `).get() as {
+      tracked_conversations: number;
+      total_runs: number;
+      total_successes: number;
+      total_failures: number;
+      total_retries: number;
+    };
+
+    const recent = this.db.prepare(`
+      SELECT
+        COALESCE(SUM(CASE WHEN state = 'running' THEN 1 ELSE 0 END), 0) as runs,
+        COALESCE(SUM(CASE WHEN state = 'succeeded' THEN 1 ELSE 0 END), 0) as successes,
+        COALESCE(SUM(CASE WHEN state = 'failed' THEN 1 ELSE 0 END), 0) as failures,
+        COALESCE(SUM(CASE WHEN state = 'skipped_no_consent' THEN 1 ELSE 0 END), 0) as skipped_no_consent
+      FROM summary_events
+      WHERE created_at >= ?
+    `).get(windowStart.toISOString()) as {
+      runs: number;
+      successes: number;
+      failures: number;
+      skipped_no_consent: number;
+    };
+
+    const totalRuns = totals.total_runs || 0;
+    const totalSuccesses = totals.total_successes || 0;
+    const totalFailures = totals.total_failures || 0;
+    const recentRuns = recent.runs || 0;
+    const recentSuccesses = recent.successes || 0;
+    const recentFailures = recent.failures || 0;
+
+    return {
+      timestamp: now.toISOString(),
+      tracked_conversations: totals.tracked_conversations || 0,
+      total_runs: totalRuns,
+      total_successes: totalSuccesses,
+      total_failures: totalFailures,
+      total_retries: totals.total_retries || 0,
+      success_rate: totalRuns > 0 ? totalSuccesses / totalRuns : 0,
+      failure_rate: totalRuns > 0 ? totalFailures / totalRuns : 0,
+      last_24h: {
+        runs: recentRuns,
+        successes: recentSuccesses,
+        failures: recentFailures,
+        skipped_no_consent: recent.skipped_no_consent || 0,
+        success_rate: recentRuns > 0 ? recentSuccesses / recentRuns : 0,
+        failure_rate: recentRuns > 0 ? recentFailures / recentRuns : 0,
+      },
+    };
   }
 
   /**

@@ -18,6 +18,23 @@ export interface Message {
   code_identifiers?: string[];
 }
 
+export type MessageChunkKind = 'code' | 'prose';
+
+/**
+ * Message chunk record for chunk-level retrieval
+ */
+export interface MessageChunk {
+  id: string;
+  parent_message_id: string;
+  conversation_id: string;
+  chunk_index: number;
+  chunk_kind: MessageChunkKind;
+  content: string;
+  language?: string;
+  token_estimate: number;
+  created_at: string;
+}
+
 /**
  * Conversation types - represents a full chat session
  */
@@ -42,6 +59,56 @@ export interface ConversationSummary {
   content_hash?: string;
   embedding_status: 'pending' | 'success' | 'failed';
   error_message?: string;
+}
+
+export type SummaryJobState =
+  | 'queued'
+  | 'running'
+  | 'succeeded'
+  | 'failed'
+  | 'skipped_no_consent';
+
+export interface SummaryHealthRecord {
+  conversation_id: string;
+  last_state: SummaryJobState;
+  last_run_at?: string;
+  last_success_at?: string;
+  last_error?: string;
+  consecutive_failures: number;
+  total_runs: number;
+  total_successes: number;
+  total_failures: number;
+  total_retries: number;
+  updated_at: string;
+}
+
+export interface SummaryEventRecord {
+  id: string;
+  conversation_id: string;
+  state: SummaryJobState;
+  attempt: number;
+  error_message?: string;
+  metadata?: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface SummaryHealthSnapshot {
+  timestamp: string;
+  tracked_conversations: number;
+  total_runs: number;
+  total_successes: number;
+  total_failures: number;
+  total_retries: number;
+  success_rate: number;
+  failure_rate: number;
+  last_24h: {
+    runs: number;
+    successes: number;
+    failures: number;
+    skipped_no_consent: number;
+    success_rate: number;
+    failure_rate: number;
+  };
 }
 
 /**
@@ -116,7 +183,12 @@ export interface RetrievalResult {
   message: Message;
   similarity_score: number;
   conversation_summary?: string;
-  content_type?: 'message' | 'conversation_summary' | 'user_profile' | 'knowledge_chunk';
+  content_type?: 'message' | 'message_chunk' | 'conversation_summary' | 'user_profile' | 'knowledge_chunk';
+  parent_message_id?: string;
+  chunk_index?: number;
+  chunk_kind?: MessageChunkKind;
+  chunk_language?: string;
+  token_estimate?: number;
   fts_score?: number;  // Phase 3: BM25 score from FTS search
 }
 
