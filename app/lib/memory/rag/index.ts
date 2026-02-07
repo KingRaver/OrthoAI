@@ -7,7 +7,10 @@ import { Message, AugmentedPrompt, RetrievalResult } from '../schemas';
 import { getStorage } from '../storage';
 import { logRetrievalMetrics, RetrievalMetrics } from '../metrics';
 import { getMemoryConfig } from '../config';
-import { deduplicateAndRerank } from './rerank';
+import { deduplicateAndRerank, extractCodeIdentifiers } from './rerank';
+import { memoryDebug } from '../debug';
+import { recordMemoryFailure, recordMemorySuccess } from '../ops';
+import { chunkMessage } from '../chunking';
 
 type SqliteStats = ReturnType<ReturnType<typeof getStorage>['getStats']>;
 
@@ -61,7 +64,7 @@ export class RAGManager {
     if (this.initialized) return;
 
     try {
-      console.log('[RAGManager] Initializing RAG system...');
+      memoryDebug('[RAGManager] Initializing RAG system...');
 
       // Check if embedding model is available
       const modelAvailable = await this.embeddings.checkModelAvailability();
@@ -76,7 +79,7 @@ export class RAGManager {
       await this.retrieval.initialize();
 
       this.initialized = true;
-      console.log('[RAGManager] RAG system initialized successfully');
+      memoryDebug('[RAGManager] RAG system initialized successfully');
     } catch (error) {
       console.error('[RAGManager] Error initializing RAG system:', error);
       throw error;
@@ -92,9 +95,26 @@ export class RAGManager {
       // Store in database first
       const storage = getStorage();
       const savedMessage = storage.getMessage(message.id) || message;
+      const config = getMemoryConfig();
 
       // Add to Chroma for semantic search
       await this.retrieval.addMessageEmbedding(savedMessage);
+
+      if (config.ragChunking) {
+        try {
+          const chunkDrafts = chunkMessage(savedMessage);
+          if (chunkDrafts.length > 0) {
+            const persistedChunks = storage.replaceMessageChunks(savedMessage.id, chunkDrafts);
+            await this.retrieval.addMessageChunkEmbeddings(persistedChunks, savedMessage.role);
+            memoryDebug(
+              `[RAGManager] Added ${persistedChunks.length} chunks for message ${savedMessage.id}`
+            );
+          }
+        } catch (chunkError) {
+          recordMemoryFailure('embedding', 'RAGManager.processMessageForRAG.chunking', chunkError);
+          console.warn('[RAGManager] Failed to chunk/embed message:', chunkError);
+        }
+      }
 
       // Update embedding metadata
       storage.updateEmbeddingStatus(
@@ -103,8 +123,9 @@ export class RAGManager {
         message.id
       );
 
-      console.log(`[RAGManager] Message ${message.id} processed for RAG`);
+      memoryDebug(`[RAGManager] Message ${message.id} processed for RAG`);
     } catch (error) {
+      recordMemoryFailure('embedding', 'RAGManager.processMessageForRAG', error);
       console.error('[RAGManager] Error processing message for RAG:', error);
 
       // Still update status so we know it failed
@@ -138,8 +159,9 @@ export class RAGManager {
         );
       });
 
-      console.log(`[RAGManager] Processed ${messages.length} messages for RAG`);
+      memoryDebug(`[RAGManager] Processed ${messages.length} messages for RAG`);
     } catch (error) {
+      recordMemoryFailure('embedding', 'RAGManager.processMessagesForRAG', error);
       console.error('[RAGManager] Error batch processing messages:', error);
       throw error;
     }
@@ -157,6 +179,15 @@ export class RAGManager {
   ): Promise<RetrievalResult[]> {
     const startTime = Date.now();
     const config = getMemoryConfig();
+    const storage = getStorage();
+
+    const hasConversationHistory = Boolean(
+      conversationId && storage.getConversationMessageCount(conversationId) > 0
+    );
+    const summary = conversationId ? storage.getConversationSummary(conversationId) : null;
+    const shouldQuerySummary = Boolean(summary && summary.embedding_status === 'success');
+    const profile = includeProfile ? storage.getUserProfile() : null;
+    const shouldQueryProfile = Boolean(profile && profile.embedding_status === 'success');
 
     // Track timing for each source
     let denseStartTime = 0;
@@ -166,7 +197,7 @@ export class RAGManager {
     let rerankMs = 0;
 
     try {
-      console.log(
+      memoryDebug(
         `[RAGManager] Retrieving similar messages for: "${query.substring(0, 50)}..."`
       );
 
@@ -174,37 +205,54 @@ export class RAGManager {
       let conversationResults: RetrievalResult[] = [];
       let globalResults: RetrievalResult[] = [];
       let ftsResults: RetrievalResult[] = [];
+      const retrievalLimit = topK ? topK * 2 : 10;
 
       // Phase 3: Hybrid Retrieval (Dense + FTS)
       if (config.ragHybrid) {
-        console.log('[RAGManager] Using hybrid retrieval (dense + FTS)');
+        memoryDebug('[RAGManager] Using hybrid retrieval (dense + FTS)');
+        if (conversationId && !hasConversationHistory) {
+          memoryDebug(
+            `[RAGManager] Conversation ${conversationId} has no prior messages; falling back to global dense/FTS retrieval`
+          );
+        }
 
         // Run dense and FTS searches in parallel
         denseStartTime = Date.now();
         const ftsStartTime = Date.now();
 
-        const [denseConvResults, ftsConvResults] = await Promise.all([
-          // Dense retrieval (semantic)
-          conversationId
+        const [denseResults, lexicalResults] = await Promise.all([
+          hasConversationHistory && conversationId
             ? this.retrieveWithFilters(
                 query,
                 { conversation_id: conversationId },
-                topK ? topK * 2 : 10  // Over-fetch for reranking
+                retrievalLimit
               )
-            : Promise.resolve([]),
+            : this.retrieval.search(query, retrievalLimit),
           // FTS retrieval (lexical)
-          this.retrieval.ftsSearch(query, conversationId, topK ? topK * 2 : 10),
+          this.retrieval.ftsSearch(
+            query,
+            hasConversationHistory ? conversationId : undefined,
+            retrievalLimit
+          ),
         ]);
 
         denseMs = Date.now() - denseStartTime;
         ftsMs = Date.now() - ftsStartTime;
 
-        conversationResults = denseConvResults;
-        ftsResults = ftsConvResults;
+        if (hasConversationHistory) {
+          conversationResults = denseResults;
+        } else {
+          globalResults = denseResults;
+        }
+        ftsResults = lexicalResults;
 
         // Rerank combined results
         rerankStartTime = Date.now();
-        results = deduplicateAndRerank(conversationResults, ftsResults, query);
+        results = deduplicateAndRerank(
+          hasConversationHistory ? conversationResults : globalResults,
+          ftsResults,
+          query
+        );
         rerankMs = Date.now() - rerankStartTime;
 
         // Limit to topK after reranking
@@ -212,19 +260,23 @@ export class RAGManager {
           results = results.slice(0, topK);
         }
 
-        console.log(
-          `[RAGManager] Hybrid retrieval: ${conversationResults.length} dense + ${ftsResults.length} FTS → ${results.length} reranked (dense: ${denseMs}ms, FTS: ${ftsMs}ms, rerank: ${rerankMs}ms)`
+        memoryDebug(
+          `[RAGManager] Hybrid retrieval: ${conversationResults.length} conv-dense + ${globalResults.length} global-dense + ${ftsResults.length} FTS → ${results.length} reranked (dense: ${denseMs}ms, FTS: ${ftsMs}ms, rerank: ${rerankMs}ms)`
         );
       } else {
         // Phase 1-2: Dense-only retrieval (original behavior)
         denseStartTime = Date.now();
-        if (conversationId) {
+        if (hasConversationHistory && conversationId) {
           conversationResults = await this.retrieveWithFilters(
             query,
             { conversation_id: conversationId },
             topK
           );
           results = conversationResults;
+        } else if (conversationId) {
+          memoryDebug(
+            `[RAGManager] Conversation ${conversationId} has no prior messages; skipping conversation-scoped dense retrieval`
+          );
         }
 
         // Global fallback if conversation results are insufficient
@@ -237,22 +289,28 @@ export class RAGManager {
 
       // Summary retrieval
       let summaryResults: RetrievalResult[] = [];
-      if (conversationId) {
+      if (conversationId && shouldQuerySummary) {
         summaryResults = await this.retrieveWithFilters(
           query,
           { conversation_id: conversationId, content_type: 'conversation_summary' },
           1
         );
+      } else if (conversationId) {
+        memoryDebug(
+          `[RAGManager] Skipping summary retrieval for conversation ${conversationId} (no summary embedding ready)`
+        );
       }
 
       // Profile retrieval (only if consent given)
       let profileResults: RetrievalResult[] = [];
-      if (includeProfile) {
+      if (shouldQueryProfile) {
         profileResults = await this.retrieveWithFilters(
           query,
           { content_type: 'user_profile' },
           1
         );
+      } else if (includeProfile) {
+        memoryDebug('[RAGManager] Skipping profile retrieval (no profile embedding ready)');
       }
 
       const merged = this.mergeResults(results, summaryResults, profileResults, topK);
@@ -294,8 +352,10 @@ export class RAGManager {
         console.warn('[RAGManager] Failed to log metrics:', err);
       });
 
+      recordMemorySuccess('retrieval');
       return merged;
     } catch (error) {
+      recordMemoryFailure('retrieval', 'RAGManager.retrieveSimilarMessages', error);
       console.error('[RAGManager] Error retrieving similar messages:', error);
 
       // Log failed retrieval
@@ -332,13 +392,13 @@ export class RAGManager {
    */
   async retrieveWithFilters(
     query: string,
-    filters: {
-      conversation_id?: string;
-      role?: 'user' | 'assistant';
-      content_type?: 'message' | 'conversation_summary' | 'user_profile' | 'knowledge_chunk';
-    },
-    topK?: number
-  ): Promise<RetrievalResult[]> {
+      filters: {
+        conversation_id?: string;
+        role?: 'user' | 'assistant';
+        content_type?: 'message' | 'message_chunk' | 'conversation_summary' | 'user_profile' | 'knowledge_chunk';
+      },
+      topK?: number
+    ): Promise<RetrievalResult[]> {
     try {
       const results = await this.retrieval.searchWithFilters(
         query,
@@ -494,7 +554,7 @@ Continue to be rigorous, evidence-focused, and concise. Reference past conversat
     try {
       await this.retrieval.clear();
       this.embeddings.clearCache();
-      console.log('[RAGManager] RAG system cleared');
+      memoryDebug('[RAGManager] RAG system cleared');
     } catch (error) {
       console.error('[RAGManager] Error clearing RAG system:', error);
       throw error;
@@ -522,7 +582,7 @@ Continue to be rigorous, evidence-focused, and concise. Reference past conversat
   /**
    * Build a memory context block to append to system prompts
    */
-  buildMemoryContextBlock(retrievedContext: RetrievalResult[]): string {
+  buildMemoryContextBlock(retrievedContext: RetrievalResult[], query?: string): string {
     if (retrievedContext.length === 0) {
       return '';
     }
@@ -532,12 +592,17 @@ Continue to be rigorous, evidence-focused, and concise. Reference past conversat
     const footer = '\n\nUse these memories only if they are directly relevant.';
     let usedTokens = this.estimateTokens(header) + this.estimateTokens(footer);
 
+    const orderedContext = this.orderContextForAssembly(retrievedContext, query);
     let memoryIndex = 1;
     const entries: string[] = [];
 
-    for (const result of retrievedContext) {
-      const snippet = result.message.content.substring(0, 200) +
-        (result.message.content.length > 200 ? '...' : '');
+    for (const result of orderedContext) {
+      const isChunk = result.content_type === 'message_chunk';
+      const isCodeChunk = isChunk && result.chunk_kind === 'code';
+      const maxMessageChars = isChunk ? 900 : 260;
+      const snippet = result.message.content.length > maxMessageChars
+        ? `${result.message.content.slice(0, maxMessageChars).trimEnd()}...`
+        : result.message.content;
 
       let label = `Memory ${memoryIndex}`;
       let incrementMemoryIndex = true;
@@ -547,6 +612,10 @@ Continue to be rigorous, evidence-focused, and concise. Reference past conversat
       } else if (result.content_type === 'user_profile') {
         label = 'User Profile';
         incrementMemoryIndex = false;
+      } else if (isCodeChunk) {
+        label = `Code Chunk ${result.chunk_index ?? memoryIndex}`;
+      } else if (isChunk) {
+        label = `Context Chunk ${result.chunk_index ?? memoryIndex}`;
       }
 
       const entryPrefix = `[${label}] (Similarity: ${(result.similarity_score * 100).toFixed(0)}%)\n` +
@@ -563,22 +632,21 @@ Continue to be rigorous, evidence-focused, and concise. Reference past conversat
         continue;
       }
 
-      const remainingTokens = ragTokenBudget - usedTokens - this.estimateTokens(entryPrefix);
-      if (remainingTokens <= 0) {
-        break;
+      if (entries.length === 0) {
+        const remainingTokens = ragTokenBudget - usedTokens - this.estimateTokens(entryPrefix);
+        if (remainingTokens <= 0) {
+          break;
+        }
+        const trimmedSnippet = this.trimToTokenBudget(snippet, remainingTokens);
+        if (!trimmedSnippet) {
+          break;
+        }
+        entries.push(`${entryPrefix}${trimmedSnippet}`);
+        usedTokens += this.estimateTokens(`${entryPrefix}${trimmedSnippet}`);
+        if (incrementMemoryIndex) {
+          memoryIndex += 1;
+        }
       }
-
-      const trimmedSnippet = this.trimToTokenBudget(snippet, remainingTokens);
-      if (!trimmedSnippet) {
-        break;
-      }
-
-      entries.push(`${entryPrefix}${trimmedSnippet}`);
-      usedTokens += this.estimateTokens(`${entryPrefix}${trimmedSnippet}`);
-      if (incrementMemoryIndex) {
-        memoryIndex += 1;
-      }
-      break;
     }
 
     if (entries.length === 0) {
@@ -586,6 +654,51 @@ Continue to be rigorous, evidence-focused, and concise. Reference past conversat
     }
 
     return `${header}${entries.join('\n\n')}${footer}`;
+  }
+
+  private orderContextForAssembly(results: RetrievalResult[], query?: string): RetrievalResult[] {
+    const config = getMemoryConfig();
+    if (!config.ragChunking) {
+      return results;
+    }
+
+    if (!this.isCodeHeavyQuery(query)) {
+      return results;
+    }
+
+    const hasCodeChunk = results.some(
+      result => result.content_type === 'message_chunk' && result.chunk_kind === 'code'
+    );
+    if (!hasCodeChunk) {
+      return results;
+    }
+
+    const sorted = [...results];
+    sorted.sort((a, b) => {
+      const priorityA = this.getContextPriority(a);
+      const priorityB = this.getContextPriority(b);
+      if (priorityA !== priorityB) {
+        return priorityA - priorityB;
+      }
+      return b.similarity_score - a.similarity_score;
+    });
+    return sorted;
+  }
+
+  private isCodeHeavyQuery(query?: string): boolean {
+    if (!query) return false;
+    if (extractCodeIdentifiers(query).size > 0) return true;
+    if (/```|`|::|=>|[{}()[\];]/.test(query)) return true;
+    const keywordRegex = /\b(function|class|interface|sql|query|api|typescript|python|javascript|schema)\b/i;
+    return keywordRegex.test(query);
+  }
+
+  private getContextPriority(result: RetrievalResult): number {
+    if (result.content_type === 'message_chunk' && result.chunk_kind === 'code') return 0;
+    if (result.content_type === 'message_chunk') return 1;
+    if (result.content_type === 'conversation_summary') return 2;
+    if (result.content_type === 'user_profile') return 3;
+    return 4;
   }
 
   /**

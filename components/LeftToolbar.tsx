@@ -26,6 +26,10 @@ export interface ToolbarSettings {
   researchMode: boolean;
   voiceEnabled: boolean;
   memoryConsent: boolean;
+  ragHybrid: boolean;
+  ragChunking: boolean;
+  ragTokenBudget: number;
+  ragSummaryFrequency: number;
   selectedCaseId: string | null;
   microphoneSensitivity: number;
 }
@@ -54,6 +58,10 @@ export default function LeftToolbar({
     researchMode: false,
     voiceEnabled: false,
     memoryConsent: false,
+    ragHybrid: false,
+    ragChunking: false,
+    ragTokenBudget: 1000,
+    ragSummaryFrequency: 5,
     selectedCaseId: null,
     microphoneSensitivity: 1,
   });
@@ -68,6 +76,7 @@ export default function LeftToolbar({
   const [profile, setProfile] = useState<UserProfile>({});
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileSaving, setProfileSaving] = useState(false);
+  const [memoryPrefsSaving, setMemoryPrefsSaving] = useState(false);
 
   // Load memory consent preference on mount
   useEffect(() => {
@@ -82,6 +91,29 @@ export default function LeftToolbar({
       }
     };
     loadConsent();
+  }, []);
+
+  // Load memory runtime preferences on mount
+  useEffect(() => {
+    const loadMemoryPreferences = async () => {
+      try {
+        const response = await fetch('/api/memory/preferences');
+        if (!response.ok) return;
+        const data = await response.json();
+        const prefs = data?.preferences;
+        if (!prefs) return;
+        setSettings(prev => ({
+          ...prev,
+          ragHybrid: Boolean(prefs.rag_hybrid),
+          ragChunking: Boolean(prefs.rag_chunking),
+          ragTokenBudget: Number(prefs.rag_token_budget) || prev.ragTokenBudget,
+          ragSummaryFrequency: Number(prefs.rag_summary_frequency) || 0,
+        }));
+      } catch (error) {
+        console.warn('[LeftToolbar] Failed to load memory preferences:', error);
+      }
+    };
+    loadMemoryPreferences();
   }, []);
 
   // Load cases when case selector is expanded
@@ -142,6 +174,56 @@ export default function LeftToolbar({
     value: ToolbarSettings[K]
   ) => {
     setSettings(prev => ({ ...prev, [key]: value }));
+  };
+
+  const updateMemoryPreferences = async (overrides: Partial<{
+    rag_hybrid: boolean;
+    rag_chunking: boolean;
+    rag_token_budget: number;
+    rag_summary_frequency: number;
+  }>) => {
+    const optimisticPreferences = {
+      rag_hybrid: settings.ragHybrid,
+      rag_chunking: settings.ragChunking,
+      rag_token_budget: settings.ragTokenBudget,
+      rag_summary_frequency: settings.ragSummaryFrequency,
+      ...overrides,
+    };
+
+    setSettings(prev => ({
+      ...prev,
+      ragHybrid: optimisticPreferences.rag_hybrid,
+      ragChunking: optimisticPreferences.rag_chunking,
+      ragTokenBudget: optimisticPreferences.rag_token_budget,
+      ragSummaryFrequency: optimisticPreferences.rag_summary_frequency,
+    }));
+
+    setMemoryPrefsSaving(true);
+    try {
+      const response = await fetch('/api/memory/preferences', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ preferences: optimisticPreferences }),
+      });
+      if (!response.ok) {
+        console.warn('[LeftToolbar] Failed to save memory preferences');
+        return;
+      }
+      const data = await response.json();
+      const prefs = data?.preferences;
+      if (!prefs) return;
+      setSettings(prev => ({
+        ...prev,
+        ragHybrid: Boolean(prefs.rag_hybrid),
+        ragChunking: Boolean(prefs.rag_chunking),
+        ragTokenBudget: Number(prefs.rag_token_budget) || prev.ragTokenBudget,
+        ragSummaryFrequency: Number(prefs.rag_summary_frequency) || 0,
+      }));
+    } catch (error) {
+      console.warn('[LeftToolbar] Failed to update memory preferences:', error);
+    } finally {
+      setMemoryPrefsSaving(false);
+    }
   };
 
   // Handle memory consent toggle with API call
@@ -392,6 +474,76 @@ export default function LeftToolbar({
               🧠 Memory {settings.memoryConsent ? 'ON' : 'OFF'}
             </button>
 
+            <div className="rounded-2xl border-2 border-slate-900/30 bg-white/60 p-3 space-y-2">
+              <div className="flex items-center justify-between text-[11px] font-bold text-slate-900">
+                <span>⚙️ Memory Runtime</span>
+                <span className="text-[10px] text-slate-600">
+                  {memoryPrefsSaving ? 'Saving...' : 'Local'}
+                </span>
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  onClick={() => updateMemoryPreferences({ rag_hybrid: !settings.ragHybrid })}
+                  className={`flex-1 px-2 py-1.5 rounded-lg text-xs font-bold border transition-all ${
+                    settings.ragHybrid
+                      ? 'bg-linear-to-r from-cyan-light/80 to-teal/80 text-slate-900 border-slate-900/60'
+                      : 'bg-white/80 text-slate-700 border-slate-900/30 hover:border-slate-900/60'
+                  }`}
+                  title="Hybrid retrieval (dense + lexical)"
+                >
+                  Hybrid {settings.ragHybrid ? 'ON' : 'OFF'}
+                </button>
+                <button
+                  onClick={() => updateMemoryPreferences({ rag_chunking: !settings.ragChunking })}
+                  className={`flex-1 px-2 py-1.5 rounded-lg text-xs font-bold border transition-all ${
+                    settings.ragChunking
+                      ? 'bg-linear-to-r from-blue-500/85 to-cyan-500/85 text-white border-slate-900/60'
+                      : 'bg-white/80 text-slate-700 border-slate-900/30 hover:border-slate-900/60'
+                  }`}
+                  title="Chunk long messages for chunk-level retrieval"
+                >
+                  Chunking {settings.ragChunking ? 'ON' : 'OFF'}
+                </button>
+              </div>
+
+              <label className="block text-[10px] font-bold text-slate-700 uppercase tracking-wide">
+                Token Budget
+              </label>
+              <select
+                value={settings.ragTokenBudget}
+                onChange={(e) =>
+                  updateMemoryPreferences({ rag_token_budget: Number(e.target.value) })
+                }
+                className="w-full px-2 py-1.5 rounded-lg text-xs font-bold border-2 border-slate-900/35 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal/60"
+                title="Maximum memory tokens added to system prompt"
+              >
+                {[600, 800, 1000, 1200, 1500, 1800, 2200].map(value => (
+                  <option key={value} value={value}>
+                    {value} tokens
+                  </option>
+                ))}
+              </select>
+
+              <label className="block text-[10px] font-bold text-slate-700 uppercase tracking-wide">
+                Summary Frequency
+              </label>
+              <select
+                value={settings.ragSummaryFrequency}
+                onChange={(e) =>
+                  updateMemoryPreferences({ rag_summary_frequency: Number(e.target.value) })
+                }
+                className="w-full px-2 py-1.5 rounded-lg text-xs font-bold border-2 border-slate-900/35 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal/60"
+                title="Generate summaries every N assistant messages (0 disables)"
+              >
+                {[0, 3, 5, 8, 10, 15, 20].map(value => (
+                  <option key={value} value={value}>
+                    {value === 0 ? 'Disabled' : `Every ${value} msgs`}
+                  </option>
+                ))}
+              </select>
+            </div>
+
             <button
               onClick={() => updateSetting('voiceEnabled', !settings.voiceEnabled)}
               className={`${toggleStyle} ${
@@ -575,6 +727,64 @@ export default function LeftToolbar({
         >
           🧠 Memory
         </button>
+        <div className="w-full rounded-xl border-2 border-slate-900/30 bg-white/70 px-3 py-2 space-y-2">
+          <div className="flex items-center justify-between text-[11px] font-bold text-slate-900">
+            <span>⚙️ Memory Runtime</span>
+            <span className="text-[10px] text-slate-600">
+              {memoryPrefsSaving ? 'Saving...' : 'Local'}
+            </span>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={() => updateMemoryPreferences({ rag_hybrid: !settings.ragHybrid })}
+              className={`flex-1 px-2 py-1.5 rounded-lg text-[11px] font-bold border ${
+                settings.ragHybrid
+                  ? 'bg-linear-to-r from-cyan-light/80 to-teal/80 text-slate-900 border-slate-900/60'
+                  : 'bg-white text-slate-700 border-slate-900/30'
+              }`}
+            >
+              Hybrid {settings.ragHybrid ? 'ON' : 'OFF'}
+            </button>
+            <button
+              onClick={() => updateMemoryPreferences({ rag_chunking: !settings.ragChunking })}
+              className={`flex-1 px-2 py-1.5 rounded-lg text-[11px] font-bold border ${
+                settings.ragChunking
+                  ? 'bg-linear-to-r from-blue-500/85 to-cyan-500/85 text-white border-slate-900/60'
+                  : 'bg-white text-slate-700 border-slate-900/30'
+              }`}
+            >
+              Chunk {settings.ragChunking ? 'ON' : 'OFF'}
+            </button>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <select
+              value={settings.ragTokenBudget}
+              onChange={(e) =>
+                updateMemoryPreferences({ rag_token_budget: Number(e.target.value) })
+              }
+              className="px-2 py-1.5 rounded-lg text-[11px] font-bold border border-slate-900/35 bg-white text-slate-900"
+            >
+              {[600, 800, 1000, 1200, 1500].map(value => (
+                <option key={value} value={value}>
+                  {value} tok
+                </option>
+              ))}
+            </select>
+            <select
+              value={settings.ragSummaryFrequency}
+              onChange={(e) =>
+                updateMemoryPreferences({ rag_summary_frequency: Number(e.target.value) })
+              }
+              className="px-2 py-1.5 rounded-lg text-[11px] font-bold border border-slate-900/35 bg-white text-slate-900"
+            >
+              {[0, 3, 5, 10].map(value => (
+                <option key={value} value={value}>
+                  {value === 0 ? 'No summary' : `Every ${value}`}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
         <button
           onClick={() => updateSetting('voiceEnabled', !settings.voiceEnabled)}
           className={`${toggleStyle} ${

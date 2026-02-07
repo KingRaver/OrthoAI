@@ -150,6 +150,10 @@ export default function Chat() {
     researchMode: false,
     voiceEnabled: false,
     memoryConsent: false,
+    ragHybrid: false,
+    ragChunking: false,
+    ragTokenBudget: 1000,
+    ragSummaryFrequency: 5,
     selectedCaseId: null,
     microphoneSensitivity: 1,
   });
@@ -286,6 +290,12 @@ export default function Chat() {
           enableTools: currentSettings.enableTools,
           researchMode: currentSettings.researchMode,
           useMemory: currentSettings.memoryConsent,
+          memoryPreferences: {
+            rag_hybrid: currentSettings.ragHybrid,
+            rag_chunking: currentSettings.ragChunking,
+            rag_token_budget: currentSettings.ragTokenBudget,
+            rag_summary_frequency: currentSettings.ragSummaryFrequency,
+          },
           manualModeOverride: currentSettings.manualMode || undefined,
           conversationId: conversationId || undefined,
           caseId: currentSettings.selectedCaseId || undefined

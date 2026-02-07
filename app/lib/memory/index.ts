@@ -2,14 +2,45 @@
 // Memory system main export - MemoryManager orchestrates storage and RAG
 
 import { SQLiteStorage } from './storage/sqlite';
+import {
+  getStorage as getSharedStorage,
+  initializeStorage as initializeSharedStorage,
+  closeStorage as closeSharedStorage,
+} from './storage';
 import { RAGManager } from './rag';
 import { extractCodeIdentifiers } from './rag/rerank';
-import { Conversation, Message, AugmentedPrompt, ConversationSummary, UserProfile } from './schemas';
+import {
+  Conversation,
+  Message,
+  AugmentedPrompt,
+  ConversationSummary,
+  UserProfile,
+  SummaryHealthSnapshot,
+  SummaryEventRecord,
+} from './schemas';
 import { getMemoryConfig } from './config';
 import { getDefaultModel, getLlmChatUrl } from '@/app/lib/llm/config';
 import { createHash } from 'crypto';
+import { fetchWithTimeoutAndRetry } from './fetch';
+import { memoryDebug } from './debug';
+import { recordMemoryFailure, recordMemorySuccess } from './ops';
+import {
+  applyMemoryRuntimePreferencesToEnv,
+  getMemoryRuntimePreferencesFromEnv,
+  normalizeMemoryRuntimePreferences,
+  readMemoryRuntimePreferencesFromStorage,
+} from './preferences';
 
-let storageInstance: SQLiteStorage | null = null;
+type SummaryCircuitState = {
+  consecutiveFailures: number;
+  openUntilMs: number;
+};
+
+const SUMMARY_NO_CONSENT_REASON = 'Summary skipped: memory profile consent not granted';
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 class TaskQueue {
   private queue: Array<() => Promise<void>> = [];
@@ -27,6 +58,10 @@ class TaskQueue {
 
   getDepth(): number {
     return this.queue.length;
+  }
+
+  getActiveCount(): number {
+    return this.active;
   }
 
   private runNext(): void {
@@ -48,29 +83,21 @@ class TaskQueue {
  * Ensures only one database connection across the app
  */
 export function getStorage(): SQLiteStorage {
-  if (!storageInstance) {
-    const dbPath = process.env.MEMORY_DB_PATH || './.data/orthoai.db';
-    storageInstance = new SQLiteStorage(dbPath);
-  }
-  return storageInstance;
+  return getSharedStorage();
 }
 
 /**
  * Initialize storage (call once at app startup)
  */
 export async function initializeStorage(): Promise<void> {
-  const storage = getStorage();
-  await storage.initialize();
+  await initializeSharedStorage();
 }
 
 /**
  * Close storage connection
  */
 export function closeStorage(): void {
-  if (storageInstance) {
-    storageInstance.close();
-    storageInstance = null;
-  }
+  closeSharedStorage();
 }
 
 /**
@@ -83,6 +110,12 @@ export class MemoryManager {
   private initialized: boolean = false;
   private embeddingQueue = new TaskQueue(2);
   private summaryQueue = new TaskQueue(1);
+  private queuedSummaryConversations = new Set<string>();
+  private summaryDroppedJobs = 0;
+  private summaryCircuit: SummaryCircuitState = {
+    consecutiveFailures: 0,
+    openUntilMs: 0,
+  };
 
   constructor() {
     this.storage = getStorage();
@@ -98,9 +131,15 @@ export class MemoryManager {
 
     try {
       await this.storage.initialize();
+      const persistedPreferences = readMemoryRuntimePreferencesFromStorage(this.storage);
+      const normalizedPreferences = normalizeMemoryRuntimePreferences(
+        persistedPreferences,
+        getMemoryRuntimePreferencesFromEnv()
+      );
+      applyMemoryRuntimePreferencesToEnv(normalizedPreferences);
       await this.rag.initialize();
       this.initialized = true;
-      console.log('[MemoryManager] Memory system initialized');
+      memoryDebug('[MemoryManager] Memory system initialized');
     } catch (error) {
       console.error('[MemoryManager] Error initializing:', error);
       // Don't throw - allow graceful degradation
@@ -162,6 +201,7 @@ export class MemoryManager {
       try {
         await this.rag.processMessageForRAG(message);
       } catch (error) {
+        recordMemoryFailure('embedding', 'MemoryManager.saveMessage.embeddingQueue', error);
         console.warn('[MemoryManager] Error processing message for RAG:', error);
       }
     });
@@ -175,19 +215,197 @@ export class MemoryManager {
         const count = this.getConversationMessageCount(conversationId, 'assistant');
 
         if (count % freq === 0) {
-          // Generate summary asynchronously (don't block message saving)
-          this.summaryQueue.enqueue(async () => {
-            try {
-              await this.generateConversationSummary(conversationId);
-            } catch (error) {
-              console.warn('[MemoryManager] Error generating conversation summary:', error);
-            }
-          });
+          this.scheduleSummaryGeneration(conversationId);
         }
       }
     }
 
     return message;
+  }
+
+  private scheduleSummaryGeneration(conversationId: string): void {
+    const config = getMemoryConfig();
+
+    if (!this.isProfileConsentGranted()) {
+      this.storage.recordSummaryState(conversationId, 'skipped_no_consent', {
+        errorMessage: SUMMARY_NO_CONSENT_REASON,
+        metadata: { phase: 'enqueue' },
+      });
+      return;
+    }
+
+    if (this.isSummaryCircuitOpen()) {
+      this.summaryDroppedJobs += 1;
+      this.storage.recordSummaryState(conversationId, 'failed', {
+        errorMessage: 'Summary circuit breaker open',
+        countAsFailure: false,
+        metadata: {
+          phase: 'enqueue',
+          reason: 'circuit_open',
+          open_until: new Date(this.summaryCircuit.openUntilMs).toISOString(),
+        },
+      });
+      return;
+    }
+
+    const outstanding = this.summaryQueue.getDepth() + this.summaryQueue.getActiveCount();
+    if (outstanding >= config.summaryQueueMaxDepth) {
+      this.summaryDroppedJobs += 1;
+      this.storage.recordSummaryState(conversationId, 'failed', {
+        errorMessage: 'Summary queue at capacity',
+        countAsFailure: false,
+        metadata: {
+          phase: 'enqueue',
+          reason: 'queue_full',
+          max_depth: config.summaryQueueMaxDepth,
+          outstanding,
+        },
+      });
+      return;
+    }
+
+    if (this.queuedSummaryConversations.has(conversationId)) {
+      memoryDebug(`[MemoryManager] Skipping duplicate summary enqueue for ${conversationId}`);
+      return;
+    }
+
+    this.queuedSummaryConversations.add(conversationId);
+    this.storage.recordSummaryState(conversationId, 'queued', {
+      metadata: {
+        phase: 'enqueue',
+        waiting_depth: this.summaryQueue.getDepth(),
+        active: this.summaryQueue.getActiveCount(),
+      },
+    });
+
+    this.summaryQueue.enqueue(async () => {
+      try {
+        await this.runSummaryJob(conversationId);
+      } catch (error) {
+        recordMemoryFailure('summary', 'MemoryManager.runSummaryJob', error);
+      } finally {
+        this.queuedSummaryConversations.delete(conversationId);
+      }
+    });
+  }
+
+  private async runSummaryJob(conversationId: string): Promise<void> {
+    const config = getMemoryConfig();
+    const maxAttempts = Math.max(1, config.summaryJobMaxAttempts);
+
+    if (!this.isProfileConsentGranted()) {
+      this.storage.recordSummaryState(conversationId, 'skipped_no_consent', {
+        errorMessage: SUMMARY_NO_CONSENT_REASON,
+        metadata: { phase: 'execute' },
+      });
+      return;
+    }
+
+    if (this.isSummaryCircuitOpen()) {
+      this.summaryDroppedJobs += 1;
+      this.storage.recordSummaryState(conversationId, 'failed', {
+        errorMessage: 'Summary circuit breaker open',
+        countAsFailure: false,
+        metadata: {
+          phase: 'execute',
+          reason: 'circuit_open',
+          open_until: new Date(this.summaryCircuit.openUntilMs).toISOString(),
+        },
+      });
+      return;
+    }
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      if (!this.isProfileConsentGranted()) {
+        this.storage.recordSummaryState(conversationId, 'skipped_no_consent', {
+          attempt,
+          errorMessage: SUMMARY_NO_CONSENT_REASON,
+          metadata: { phase: 'execute', reason: 'consent_revoked' },
+        });
+        return;
+      }
+
+      this.storage.recordSummaryState(conversationId, 'running', {
+        attempt,
+        metadata: {
+          phase: 'execute',
+          attempt,
+          max_attempts: maxAttempts,
+        },
+      });
+
+      try {
+        await this.generateConversationSummary(conversationId);
+        this.storage.recordSummaryState(conversationId, 'succeeded', {
+          attempt,
+          metadata: {
+            phase: 'execute',
+            attempt,
+          },
+        });
+        this.summaryCircuit.consecutiveFailures = 0;
+        this.summaryCircuit.openUntilMs = 0;
+        return;
+      } catch (error) {
+        const errorMessage = this.getErrorMessage(error);
+        const willRetry = attempt < maxAttempts;
+        this.storage.recordSummaryState(conversationId, 'failed', {
+          attempt,
+          errorMessage,
+          metadata: {
+            phase: 'execute',
+            attempt,
+            max_attempts: maxAttempts,
+            will_retry: willRetry,
+          },
+          countAsRetry: willRetry,
+        });
+
+        if (willRetry) {
+          const backoffMs = config.summaryRetryBaseDelayMs * Math.pow(2, attempt - 1);
+          await sleep(backoffMs);
+          continue;
+        }
+
+        this.registerSummaryCircuitFailure(errorMessage);
+        throw error;
+      }
+    }
+  }
+
+  private registerSummaryCircuitFailure(errorMessage: string): void {
+    const config = getMemoryConfig();
+    this.summaryCircuit.consecutiveFailures += 1;
+
+    if (
+      this.summaryCircuit.consecutiveFailures >=
+      config.summaryCircuitBreakerFailureThreshold
+    ) {
+      this.summaryCircuit.openUntilMs = Date.now() + config.summaryCircuitBreakerCooldownMs;
+      memoryDebug(
+        `[MemoryManager] Summary circuit opened until ${new Date(
+          this.summaryCircuit.openUntilMs
+        ).toISOString()} after ${this.summaryCircuit.consecutiveFailures} failures: ${errorMessage}`
+      );
+    }
+  }
+
+  private isSummaryCircuitOpen(): boolean {
+    if (this.summaryCircuit.openUntilMs === 0) {
+      return false;
+    }
+    if (Date.now() < this.summaryCircuit.openUntilMs) {
+      return true;
+    }
+    this.summaryCircuit.openUntilMs = 0;
+    this.summaryCircuit.consecutiveFailures = 0;
+    return false;
+  }
+
+  private getErrorMessage(error: unknown): string {
+    if (error instanceof Error) return error.message;
+    if (typeof error === 'string') return error;
+    return 'Unknown error';
   }
 
   /**
@@ -215,6 +433,14 @@ export class MemoryManager {
    * Save or update a conversation summary and embed it for retrieval
    */
   async saveConversationSummary(conversationId: string, summary: string): Promise<void> {
+    if (!this.isProfileConsentGranted()) {
+      this.storage.recordSummaryState(conversationId, 'skipped_no_consent', {
+        errorMessage: SUMMARY_NO_CONSENT_REASON,
+        metadata: { phase: 'persist' },
+      });
+      return;
+    }
+
     const contentHash = this.hashContent(summary);
     const existing = this.storage.getConversationSummary(conversationId);
     if (existing && existing.content_hash === contentHash) {
@@ -240,9 +466,19 @@ export class MemoryManager {
    * Phase 2: Called automatically every N messages
    */
   async generateConversationSummary(conversationId: string): Promise<void> {
-    console.log(`[MemoryManager] Starting summary generation for conversation ${conversationId}`);
+    memoryDebug(`[MemoryManager] Starting summary generation for conversation ${conversationId}`);
+
+    if (!this.isProfileConsentGranted()) {
+      this.storage.recordSummaryState(conversationId, 'skipped_no_consent', {
+        errorMessage: SUMMARY_NO_CONSENT_REASON,
+        metadata: { phase: 'generate' },
+      });
+      return;
+    }
 
     try {
+      const config = getMemoryConfig();
+
       // Fetch last 10 messages from the conversation (DB-limited)
       const recentMessagesDesc = this.storage.getConversationMessages(conversationId, {
         limit: 10,
@@ -250,7 +486,7 @@ export class MemoryManager {
       });
       const recentMessages = recentMessagesDesc.reverse();
 
-      console.log(`[MemoryManager] Found ${recentMessages.length} messages to summarize`);
+      memoryDebug(`[MemoryManager] Found ${recentMessages.length} messages to summarize`);
 
       if (recentMessages.length === 0) {
         console.warn('[MemoryManager] No messages to summarize');
@@ -275,28 +511,36 @@ Summary (2-3 sentences):`;
 
       // Call LLM API to generate summary
       const summaryModel = process.env.SUMMARY_MODEL || getDefaultModel();
-      const response = await fetch(getLlmChatUrl(), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: summaryModel,
-          messages: [
-            {
-              role: 'system',
-              content: 'You are OrthoAI. Produce a concise research summary with key topics, evidence, and hypotheses.'
-            },
-            {
-              role: 'user',
-              content: summaryPrompt
-            }
-          ],
-          temperature: 0.2,
-          max_tokens: 300,
-          stream: false,
-        }),
-      });
+      const response = await fetchWithTimeoutAndRetry(
+        getLlmChatUrl(),
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: summaryModel,
+            messages: [
+              {
+                role: 'system',
+                content: 'You are OrthoAI. Produce a concise research summary with key topics, evidence, and hypotheses.'
+              },
+              {
+                role: 'user',
+                content: summaryPrompt
+              }
+            ],
+            temperature: 0.2,
+            max_tokens: 300,
+            stream: false,
+          }),
+        },
+        {
+          timeoutMs: config.summaryRequestTimeoutMs,
+          retries: config.summaryRequestRetries,
+          retryDelayMs: 300,
+        }
+      );
 
-      console.log(`[MemoryManager] LLM response status: ${response.status}`);
+      memoryDebug(`[MemoryManager] LLM summary response status: ${response.status}`);
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -306,16 +550,18 @@ Summary (2-3 sentences):`;
       const data = await response.json();
       const summary = data.choices?.[0]?.message?.content?.trim();
 
-      console.log(`[MemoryManager] Generated summary length: ${summary?.length || 0} chars`);
+      memoryDebug(`[MemoryManager] Generated summary length: ${summary?.length || 0} chars`);
 
       if (summary) {
         // Save the summary and create embeddings
         await this.saveConversationSummary(conversationId, summary);
-        console.log(`[MemoryManager] ✓ Summary saved for conversation ${conversationId}`);
+        recordMemorySuccess('summary');
+        memoryDebug(`[MemoryManager] Summary saved for conversation ${conversationId}`);
       } else {
-        console.warn('[MemoryManager] Summary was empty or undefined');
+        throw new Error('Summary output was empty');
       }
     } catch (error) {
+      recordMemoryFailure('summary', 'MemoryManager.generateConversationSummary', error);
       console.error('[MemoryManager] ✗ Error generating summary:', error);
       throw error;
     }
@@ -326,6 +572,14 @@ Summary (2-3 sentences):`;
    */
   getConversationSummary(conversationId: string): ConversationSummary | null {
     return this.storage.getConversationSummary(conversationId);
+  }
+
+  getSummaryHealth(conversationId: string) {
+    return this.storage.getSummaryHealth(conversationId);
+  }
+
+  getSummaryEvents(limit: number = 20, conversationId?: string) {
+    return this.storage.getSummaryEvents(limit, conversationId);
   }
 
   /**
@@ -349,7 +603,9 @@ Summary (2-3 sentences):`;
     try {
       await this.rag.upsertUserProfileEmbedding(profile);
       this.storage.updateUserProfileEmbeddingStatus('success');
+      recordMemorySuccess('profile');
     } catch (error) {
+      recordMemoryFailure('profile', 'MemoryManager.saveUserProfile', error);
       this.storage.updateUserProfileEmbeddingStatus(
         'failed',
         (error as Error).message
@@ -371,8 +627,20 @@ Summary (2-3 sentences):`;
     try {
       this.storage.deleteUserProfile();
       await this.rag.deleteUserProfileEmbedding();
+      recordMemorySuccess('profile');
     } catch (error) {
+      recordMemoryFailure('profile', 'MemoryManager.clearUserProfile', error);
       console.warn('[MemoryManager] Failed to clear user profile:', error);
+    }
+  }
+
+  /**
+   * Update profile consent and enforce side effects on revocation
+   */
+  async updateProfileConsent(consent: boolean): Promise<void> {
+    this.setProfileConsent(consent);
+    if (!consent) {
+      await this.clearUserProfile();
     }
   }
 
@@ -451,9 +719,67 @@ Summary (2-3 sentences):`;
 
   getQueueDepths(): { embeddings: number; summaries: number } {
     return {
-      embeddings: this.embeddingQueue.getDepth(),
-      summaries: this.summaryQueue.getDepth()
+      embeddings: this.embeddingQueue.getDepth() + this.embeddingQueue.getActiveCount(),
+      summaries: this.summaryQueue.getDepth() + this.summaryQueue.getActiveCount(),
     };
+  }
+
+  getSummaryOperationalSnapshot(limit: number = 20): {
+    queue: {
+      waiting: number;
+      active: number;
+      trackedConversations: number;
+      maxDepth: number;
+      dropped: number;
+    };
+    circuit: {
+      isOpen: boolean;
+      openUntil: string | null;
+      consecutiveFailures: number;
+      failureThreshold: number;
+      cooldownMs: number;
+    };
+    health: SummaryHealthSnapshot;
+    recentEvents: SummaryEventRecord[];
+  } {
+    const config = getMemoryConfig();
+    const isOpen = this.isSummaryCircuitOpen();
+    const health = this.storage.getSummaryHealthSnapshot(24);
+
+    return {
+      queue: {
+        waiting: this.summaryQueue.getDepth(),
+        active: this.summaryQueue.getActiveCount(),
+        trackedConversations: this.queuedSummaryConversations.size,
+        maxDepth: config.summaryQueueMaxDepth,
+        dropped: this.summaryDroppedJobs,
+      },
+      circuit: {
+        isOpen,
+        openUntil: isOpen ? new Date(this.summaryCircuit.openUntilMs).toISOString() : null,
+        consecutiveFailures: this.summaryCircuit.consecutiveFailures,
+        failureThreshold: config.summaryCircuitBreakerFailureThreshold,
+        cooldownMs: config.summaryCircuitBreakerCooldownMs,
+      },
+      health,
+      recentEvents: this.storage.getSummaryEvents(limit),
+    };
+  }
+
+  async waitForBackgroundIdle(timeoutMs: number = 5000): Promise<boolean> {
+    const deadline = Date.now() + Math.max(50, timeoutMs);
+    while (Date.now() < deadline) {
+      const queueDepths = this.getQueueDepths();
+      if (
+        queueDepths.embeddings === 0 &&
+        queueDepths.summaries === 0 &&
+        this.queuedSummaryConversations.size === 0
+      ) {
+        return true;
+      }
+      await sleep(20);
+    }
+    return false;
   }
 
   /**
@@ -467,7 +793,10 @@ Summary (2-3 sentences):`;
    * Build a memory context block to append to system prompts
    */
   buildMemoryContextBlock(augmented: AugmentedPrompt): string {
-    return this.rag.buildMemoryContextBlock(augmented.retrieved_context);
+    return this.rag.buildMemoryContextBlock(
+      augmented.retrieved_context,
+      augmented.original_query
+    );
   }
 
   /**
@@ -506,6 +835,11 @@ export function getMemoryManager(): MemoryManager {
 export async function initializeMemory(): Promise<void> {
   const manager = getMemoryManager();
   await manager.initialize();
+}
+
+export function resetMemoryManagerForTests(): void {
+  closeStorage();
+  memoryManagerInstance = null;
 }
 
 export { SQLiteStorage };

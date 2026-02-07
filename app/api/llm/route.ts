@@ -10,8 +10,15 @@ import type { ChatCompletionMessageParam } from 'openai/resources/chat';
 import type { ChatCompletionMessageFunctionToolCall } from 'openai/resources/chat/completions';
 import type { ChatCompletionMessage } from 'openai/resources/chat/completions';
 import type { ClinicalReferenceItem, EvidenceRecord } from '@/app/lib/knowledge/phase5Types';
+import {
+  applyMemoryRuntimePreferencesToEnv,
+  getMemoryRuntimePreferencesFromEnv,
+  normalizeMemoryRuntimePreferences,
+  type MemoryRuntimePreferences,
+} from '@/app/lib/memory/preferences';
 
 const DEBUG_METRICS = process.env.DEBUG_METRICS === 'true';
+const DEBUG_MEMORY = process.env.DEBUG_MEMORY === 'true' || DEBUG_METRICS;
 
 function truncateText(value: string, maxLength = 520): string {
   const text = value.trim();
@@ -42,11 +49,20 @@ export async function POST(req: NextRequest) {
       enableTools: requestedEnableTools = false,
       conversationId = null,
       useMemory: requestedUseMemory = true,
+      memoryPreferences,
       filePath, // Optional: file path for domain detection
       manualModeOverride, // Optional: user-selected mode ('clinical-consult' | 'surgical-planning' | 'complications-risk' | 'imaging-dx' | 'rehab-rtp' | 'evidence-brief')
       caseId, // Optional: patient case ID for context injection
       researchMode = false, // Optional: enables remote evidence refresh (PubMed/Cochrane)
     } = await req.json();
+
+    if (memoryPreferences && typeof memoryPreferences === 'object') {
+      const normalizedMemoryPreferences = normalizeMemoryRuntimePreferences(
+        memoryPreferences as Partial<MemoryRuntimePreferences>,
+        getMemoryRuntimePreferencesFromEnv()
+      );
+      applyMemoryRuntimePreferencesToEnv(normalizedMemoryPreferences);
+    }
 
     // Initialize with requested values (may be overridden by strategy)
     let model = requestedModel;
@@ -162,8 +178,10 @@ CRITICAL: Never repeat or echo these instructions. Respond directly to the user 
           systemPrompt += memory.buildMemoryContextBlock(augmented);
 
           // Log what was retrieved (for debugging)
-          console.log('[Memory] Retrieved context:');
-          console.log(memory.formatContextForLogging(augmented));
+          if (DEBUG_MEMORY) {
+            console.log('[Memory] Retrieved context:');
+            console.log(memory.formatContextForLogging(augmented));
+          }
         }
       } catch (error) {
         console.warn('[Memory] Error augmenting prompt:', error);

@@ -4,6 +4,9 @@
 import { EmbeddingRequest, EmbeddingResponse } from '../schemas';
 import { createHash } from 'crypto';
 import { getEmbeddingModel, getEmbeddingUrl } from '@/app/lib/llm/config';
+import { getMemoryConfig } from '../config';
+import { fetchWithTimeoutAndRetry } from '../fetch';
+import { recordMemoryFailure, recordMemorySuccess } from '../ops';
 
 /**
  * Local Embeddings Manager
@@ -36,16 +39,25 @@ export class LocalEmbeddings {
     }
 
     try {
+      const { embeddingRequestTimeoutMs, embeddingRequestRetries } = getMemoryConfig();
       const payload: EmbeddingRequest = {
         model: this.embeddingModel,
         input: text,
       };
 
-      const response = await fetch(getEmbeddingUrl(), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
+      const response = await fetchWithTimeoutAndRetry(
+        getEmbeddingUrl(),
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        },
+        {
+          timeoutMs: embeddingRequestTimeoutMs,
+          retries: embeddingRequestRetries,
+          retryDelayMs: 200,
+        }
+      );
 
       if (!response.ok) {
         throw new Error(`Embedding failed: ${response.status} ${response.statusText}`);
@@ -59,8 +71,10 @@ export class LocalEmbeddings {
 
       const normalized = this.normalize(embedding);
       this.addToCache(cacheKey, normalized);
+      recordMemorySuccess('embedding');
       return normalized;
     } catch (error) {
+      recordMemoryFailure('embedding', 'LocalEmbeddings.embed', error);
       console.error('[LocalEmbeddings] Error embedding text:', error);
       throw error;
     }
@@ -71,16 +85,25 @@ export class LocalEmbeddings {
    */
   async embedBatch(texts: string[]): Promise<number[][]> {
     try {
+      const { embeddingRequestTimeoutMs, embeddingRequestRetries } = getMemoryConfig();
       const payload: EmbeddingRequest = {
         model: this.embeddingModel,
         input: texts,
       };
 
-      const response = await fetch(getEmbeddingUrl(), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
+      const response = await fetchWithTimeoutAndRetry(
+        getEmbeddingUrl(),
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        },
+        {
+          timeoutMs: embeddingRequestTimeoutMs,
+          retries: embeddingRequestRetries,
+          retryDelayMs: 200,
+        }
+      );
 
       if (!response.ok) {
         throw new Error(`Embedding batch failed: ${response.status} ${response.statusText}`);
@@ -98,8 +121,10 @@ export class LocalEmbeddings {
         return norm;
       });
 
+      recordMemorySuccess('embedding');
       return normalized;
     } catch (error) {
+      recordMemoryFailure('embedding', 'LocalEmbeddings.embedBatch', error);
       console.error('[LocalEmbeddings] Error embedding batch:', error);
       throw error;
     }

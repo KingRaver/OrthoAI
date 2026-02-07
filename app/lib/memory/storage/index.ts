@@ -11,7 +11,7 @@ let storageInstance: SQLiteStorage | null = null;
  */
 export function getStorage(): SQLiteStorage {
   if (!storageInstance) {
-    const dbPath = process.env.MEMORY_DB_PATH || './.data/hackerreign.db';
+    const dbPath = process.env.MEMORY_DB_PATH || './.data/orthoai.db';
     storageInstance = new SQLiteStorage(dbPath);
   }
   return storageInstance;

@@ -1,7 +1,7 @@
 // app/lib/strategy/workflows/ensemble.ts
 import { EnsembleConfig } from '../types';
 import type { ChatCompletionMessageParam } from 'openai/resources/chat';
-import { getLlmChatUrl } from '@/app/lib/llm/config';
+import { getLlmChatUrlForModel } from '@/app/lib/llm/config';
 import { getSharedEmbeddings } from '@/app/lib/memory/rag/embeddings';
 
 type LlmChatRequest = {
@@ -39,8 +39,23 @@ export class EnsembleWorkflow {
       .filter((r): r is PromiseFulfilledResult<ModelResponse> => r.status === 'fulfilled')
       .map(r => r.value);
 
+    // Log failures for debugging
+    const failedResults = results
+      .map((r, i) => ({ result: r, model: config.models[i] }))
+      .filter((r): r is { result: PromiseRejectedResult; model: string } => r.result.status === 'rejected');
+
+    if (failedResults.length > 0) {
+      console.error('[Ensemble] Model failures:');
+      failedResults.forEach(({ model, result }) => {
+        console.error(`  - ${model}: ${result.reason?.message || result.reason}`);
+      });
+    }
+
     if (successfulResults.length === 0) {
-      throw new Error('All ensemble models failed');
+      const failureDetails = failedResults
+        .map(({ model, result }) => `${model}: ${result.reason?.message || result.reason}`)
+        .join('; ');
+      throw new Error(`All ensemble models failed: ${failureDetails}`);
     }
 
     const votingResult = await this.calculateConsensus(successfulResults, config);
@@ -100,18 +115,25 @@ export class EnsembleWorkflow {
     };
 
     // Undici is configured globally in instrumentation.ts with no timeouts
-    const fetchResponse = await fetch(getLlmChatUrl(), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Connection': 'keep-alive'
-      },
-      body: JSON.stringify(body)
-    });
+    const chatUrl = getLlmChatUrlForModel(model);
+    let fetchResponse: Response;
+    try {
+      fetchResponse = await fetch(chatUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Connection': 'keep-alive'
+        },
+        body: JSON.stringify(body)
+      });
+    } catch (fetchError) {
+      const errMsg = fetchError instanceof Error ? fetchError.message : String(fetchError);
+      throw new Error(`[${model}] Network error connecting to ${chatUrl}: ${errMsg}`);
+    }
 
     if (!fetchResponse.ok) {
       const error = await fetchResponse.text();
-      throw new Error(`LLM server error: ${fetchResponse.status} - ${error}`);
+      throw new Error(`[${model}] LLM server error ${fetchResponse.status}: ${error}`);
     }
 
     const response = (await fetchResponse.json()) as LlmChatResponse;
