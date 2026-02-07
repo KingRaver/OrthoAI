@@ -1,416 +1,473 @@
-// app/lib/voice/useVoiceInput.ts
 'use client';
 
-import { useState, useRef, useEffect, useCallback } from 'react';
-import { webmToWav } from './audioRecorder';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { AudioContextRecorder, AudioProcessor } from './audioRecorder';
 
 type VoiceState = 'idle' | 'listening' | 'processing' | 'error';
-const DEBUG_VOICE = process.env.NEXT_PUBLIC_DEBUG_VOICE === 'true';
-const voiceLog = (...args: unknown[]) => {
-  if (DEBUG_VOICE) console.log(...args);
-};
-const voiceWarn = (...args: unknown[]) => {
-  if (DEBUG_VOICE) console.warn(...args);
-};
+
+interface TranscriptMetadata {
+  confidence: number;
+  language?: string;
+  durationMs?: number;
+  backend?: string;
+}
 
 interface UseVoiceInputOptions {
-  onTranscript?: (text: string) => void;
+  onTranscript?: (text: string, metadata?: TranscriptMetadata) => void;
   onStateChange?: (state: VoiceState) => void;
   onError?: (error: string) => void;
-  silenceThresholdMs?: number; // milliseconds of silence to detect end of speech (default: 3000)
+  silenceThresholdMs?: number;
+  microphoneSensitivity?: number; // 0.5 - 2.0
 }
 
 interface VoiceInputState {
   state: VoiceState;
   transcript: string;
-  audioLevel: number; // 0-1 for UI visualization
+  transcriptionConfidence: number | null;
+  audioLevel: number;
   error: string | null;
   isEnabled: boolean;
+  isRecording: boolean;
 }
 
-declare global {
-  interface Window {
-    webkitAudioContext?: typeof AudioContext;
-  }
+interface DetectionState {
+  noiseFloor: number;
+  silenceThreshold: number;
+  speechThreshold: number;
+  hasSpeech: boolean;
+  speechFrames: number;
+  silenceMs: number;
+  elapsedMs: number;
+  interruptSpeechMs: number;
 }
+
+const DEBUG_VOICE = process.env.NEXT_PUBLIC_DEBUG_VOICE === 'true';
+const MAX_RECORDING_MS = Number(process.env.NEXT_PUBLIC_VOICE_MAX_RECORDING_MS || 45000);
+
+const voiceLog = (...args: unknown[]) => {
+  if (DEBUG_VOICE) console.log(...args);
+};
+
+const voiceWarn = (...args: unknown[]) => {
+  if (DEBUG_VOICE) console.warn(...args);
+};
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function deriveThresholds(noiseFloor: number, sensitivity: number): {
+  silenceThreshold: number;
+  speechThreshold: number;
+} {
+  const normalizedSensitivity = clamp(sensitivity, 0.5, 2.0);
+  const sensitivityScale = 1 / normalizedSensitivity;
+  const silenceThreshold = clamp((noiseFloor * 1.8 + 0.002) * sensitivityScale, 0.002, 0.03);
+  const speechThreshold = clamp(silenceThreshold * 2.4, silenceThreshold + 0.003, 0.08);
+  return { silenceThreshold, speechThreshold };
+}
+
+function initialDetectionState(sensitivity: number): DetectionState {
+  const baseNoiseFloor = 0.004;
+  const { silenceThreshold, speechThreshold } = deriveThresholds(baseNoiseFloor, sensitivity);
+  return {
+    noiseFloor: baseNoiseFloor,
+    silenceThreshold,
+    speechThreshold,
+    hasSpeech: false,
+    speechFrames: 0,
+    silenceMs: 0,
+    elapsedMs: 0,
+    interruptSpeechMs: 0
+  };
+}
+
+type SttResponse = {
+  success?: boolean;
+  text?: string;
+  language?: string;
+  confidence?: number;
+  duration?: number;
+  backend?: string;
+  error?: string;
+};
 
 export function useVoiceInput(options: UseVoiceInputOptions = {}) {
   const {
     onTranscript,
     onStateChange,
     onError,
-    silenceThresholdMs = 3000 // 3 seconds default silence detection
+    silenceThresholdMs = 3000,
+    microphoneSensitivity = 1
   } = options;
 
   const [voiceState, setVoiceState] = useState<VoiceInputState>({
     state: 'idle',
     transcript: '',
+    transcriptionConfidence: null,
     audioLevel: 0,
     error: null,
-    isEnabled: false
+    isEnabled: false,
+    isRecording: false
   });
 
-  // Refs for audio recording and silence detection
+  const mountedRef = useRef(true);
   const mediaStreamRef = useRef<MediaStream | null>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const analyserRef = useRef<AnalyserNode | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
-  const silenceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const lastAudioLevelRef = useRef<number>(0);
-  const lastUiUpdateRef = useRef<number>(0);
+  const recorderRef = useRef<AudioContextRecorder | null>(null);
+  const isEnabledRef = useRef(false);
+  const isRecordingRef = useRef(false);
+  const stopRequestedRef = useRef(false);
+  const lastUiUpdateRef = useRef(0);
+  const detectionStateRef = useRef<DetectionState>(initialDetectionState(microphoneSensitivity));
+  const interruptCallbackRef = useRef<(() => void) | null>(null);
 
-  // Store callbacks in refs to avoid re-initialization
   const onTranscriptRef = useRef(onTranscript);
   const onStateChangeRef = useRef(onStateChange);
   const onErrorRef = useRef(onError);
+  const silenceThresholdMsRef = useRef(silenceThresholdMs);
+  const microphoneSensitivityRef = useRef(microphoneSensitivity);
 
-  // Update refs when callbacks change
   useEffect(() => {
     onTranscriptRef.current = onTranscript;
     onStateChangeRef.current = onStateChange;
     onErrorRef.current = onError;
   }, [onTranscript, onStateChange, onError]);
 
-  // Update state and notify
-  const updateState = useCallback((newState: VoiceState, error?: string) => {
-    setVoiceState(prev => ({
+  useEffect(() => {
+    silenceThresholdMsRef.current = silenceThresholdMs;
+  }, [silenceThresholdMs]);
+
+  useEffect(() => {
+    microphoneSensitivityRef.current = microphoneSensitivity;
+    const detection = detectionStateRef.current;
+    const thresholds = deriveThresholds(detection.noiseFloor, microphoneSensitivityRef.current);
+    detection.silenceThreshold = thresholds.silenceThreshold;
+    detection.speechThreshold = thresholds.speechThreshold;
+  }, [microphoneSensitivity]);
+
+  const updateState = useCallback((state: VoiceState, error?: string) => {
+    if (!mountedRef.current) return;
+
+    setVoiceState((prev) => ({
       ...prev,
-      state: newState,
-      error: error || null
+      state,
+      error: error ?? null
     }));
-    onStateChangeRef.current?.(newState);
+
+    onStateChangeRef.current?.(state);
     if (error) {
       onErrorRef.current?.(error);
     }
   }, []);
 
-  const clearSilenceTimeout = useCallback(() => {
-    if (silenceTimeoutRef.current) {
-      clearTimeout(silenceTimeoutRef.current);
-      silenceTimeoutRef.current = null;
-    }
-  }, []);
+  const transcribeWavBlob = useCallback(async (wavBlob: Blob) => {
+    try {
+      const response = await fetch('/api/stt', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'audio/wav'
+        },
+        body: wavBlob
+      });
 
-  // Transcribe audio using Whisper API
-  const transcribeAudio = useCallback(async () => {
-    if (audioChunksRef.current.length === 0) {
+      const payload = (await response.json().catch(() => ({}))) as SttResponse;
+      if (!response.ok) {
+        throw new Error(payload.error || `STT failed with status ${response.status}`);
+      }
+
+      const text = (payload.text || '').trim();
+      const confidence = clamp(
+        typeof payload.confidence === 'number' ? payload.confidence : 0,
+        0,
+        1
+      );
+
+      if (!mountedRef.current) return;
+
+      setVoiceState((prev) => ({
+        ...prev,
+        transcript: text,
+        transcriptionConfidence: text.length > 0 ? confidence : null
+      }));
+
+      if (text.length > 0) {
+        onTranscriptRef.current?.(text, {
+          confidence,
+          language: payload.language,
+          durationMs: payload.duration,
+          backend: payload.backend
+        });
+      }
+
+      updateState('idle');
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : 'Transcription failed';
+      console.error('[VoiceInput] Transcription error:', errorMessage);
+      updateState('error', errorMessage);
+    }
+  }, [updateState]);
+
+  const finalizeRecordingRef = useRef<((shouldTranscribe: boolean) => Promise<void>) | null>(null);
+
+  const finalizeRecording = useCallback(async (shouldTranscribe: boolean) => {
+    const recorder = recorderRef.current;
+    if (!recorder || !isRecordingRef.current) return;
+
+    stopRequestedRef.current = false;
+    isRecordingRef.current = false;
+
+    let wavBlob: Blob;
+    try {
+      wavBlob = recorder.stop();
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : 'Failed to stop recording';
+      updateState('error', errorMessage);
+      return;
+    }
+
+    if (!mountedRef.current) return;
+
+    setVoiceState((prev) => ({
+      ...prev,
+      isRecording: false,
+      audioLevel: 0
+    }));
+
+    if (!shouldTranscribe || wavBlob.size <= 44) {
       updateState('idle');
       return;
     }
 
-    try {
-      // Create blob from audio chunks
-      const webmBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-      audioChunksRef.current = []; // Clear chunks for next recording
+    updateState('processing');
+    await transcribeWavBlob(wavBlob);
+  }, [transcribeWavBlob, updateState]);
 
-      voiceLog(`[VoiceInput] Converting WebM (${webmBlob.size} bytes) to WAV...`);
+  useEffect(() => {
+    finalizeRecordingRef.current = finalizeRecording;
+  }, [finalizeRecording]);
 
-      // Convert WebM to WAV for Whisper
-      const wavBlob = await webmToWav(webmBlob);
+  const processAudioChunk = useCallback((chunk: Float32Array) => {
+    if (!mountedRef.current) return;
 
-      voiceLog(`[VoiceInput] Converted to WAV (${wavBlob.size} bytes)`);
+    const recorder = recorderRef.current;
+    if (!recorder) return;
 
-      // Create FormData with WAV audio
-      const formData = new FormData();
-      formData.append('audio', wavBlob, 'audio.wav');
+    const sampleRate = Math.max(8000, recorder.getSampleRate());
+    const chunkMs = (chunk.length / sampleRate) * 1000;
+    const level = AudioProcessor.calculateRMS(chunk);
+    const detection = detectionStateRef.current;
 
-      voiceLog(`[VoiceInput] Sending ${wavBlob.size} bytes to Whisper...`);
+    const now = performance.now();
+    if (now - lastUiUpdateRef.current >= 50) {
+      lastUiUpdateRef.current = now;
+      setVoiceState((prev) => ({ ...prev, audioLevel: level }));
+    }
 
-      // Send to Whisper STT endpoint
-      const response = await fetch('/api/stt', {
-        method: 'POST',
-        body: formData
-      });
+    if (isRecordingRef.current) {
+      detection.elapsedMs += chunkMs;
 
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({}));
-        throw new Error(
-          error.error || `STT failed with status ${response.status}`
-        );
+      if (!detection.hasSpeech) {
+        const calibrationLevel = Math.min(level, detection.speechThreshold);
+        detection.noiseFloor = detection.noiseFloor * 0.95 + calibrationLevel * 0.05;
+      } else {
+        const ambientLevel = Math.min(level, detection.silenceThreshold);
+        detection.noiseFloor = detection.noiseFloor * 0.98 + ambientLevel * 0.02;
       }
 
-      const result = await response.json();
+      const thresholds = deriveThresholds(
+        detection.noiseFloor,
+        microphoneSensitivityRef.current
+      );
+      detection.silenceThreshold = thresholds.silenceThreshold;
+      detection.speechThreshold = thresholds.speechThreshold;
 
-      if (!result.success || !result.text) {
-        voiceLog('[VoiceInput] No speech detected');
-        updateState('listening');
+      if (!detection.hasSpeech) {
+        if (level >= detection.speechThreshold) {
+          detection.speechFrames += 1;
+        } else {
+          detection.speechFrames = Math.max(0, detection.speechFrames - 1);
+        }
+
+        if (detection.speechFrames >= 4) {
+          detection.hasSpeech = true;
+          detection.speechFrames = 0;
+          detection.silenceMs = 0;
+          voiceLog(
+            `[VoiceInput] Speech detected (threshold=${detection.speechThreshold.toFixed(4)}, level=${level.toFixed(4)})`
+          );
+        }
+      } else {
+        if (level <= detection.silenceThreshold) {
+          detection.silenceMs += chunkMs;
+        } else {
+          detection.silenceMs = 0;
+        }
+
+        if (
+          detection.silenceMs >= silenceThresholdMsRef.current &&
+          !stopRequestedRef.current
+        ) {
+          stopRequestedRef.current = true;
+          void finalizeRecordingRef.current?.(true);
+          return;
+        }
+      }
+
+      if (detection.elapsedMs >= MAX_RECORDING_MS && !stopRequestedRef.current) {
+        stopRequestedRef.current = true;
+        voiceWarn('[VoiceInput] Max recording duration reached, finalizing');
+        void finalizeRecordingRef.current?.(detection.hasSpeech);
         return;
       }
 
-      voiceLog(`[VoiceInput] Transcribed: "${result.text}"`);
+      return;
+    }
 
-      // Update transcript state
-      setVoiceState(prev => ({
-        ...prev,
-        transcript: result.text
-      }));
+    // Barge-in detection while AI is speaking.
+    if (interruptCallbackRef.current && isEnabledRef.current) {
+      const triggerThreshold = Math.max(0.01, detection.speechThreshold * 1.15);
 
-      // Fire callback with transcript
-      if (onTranscriptRef.current) {
-        onTranscriptRef.current(result.text);
+      if (level >= triggerThreshold) {
+        detection.interruptSpeechMs += chunkMs;
+      } else {
+        detection.interruptSpeechMs = Math.max(0, detection.interruptSpeechMs - chunkMs * 1.5);
       }
 
-      // Return to listening state for seamless conversation loop
-      updateState('listening');
-
-    } catch (error: unknown) {
-      const errorMsg = error instanceof Error ? error.message : 'Transcription failed';
-      console.error('[VoiceInput] Transcription error:', errorMsg);
-      updateState('error', errorMsg);
+      if (detection.interruptSpeechMs >= 220) {
+        detection.interruptSpeechMs = 0;
+        const callback = interruptCallbackRef.current;
+        interruptCallbackRef.current = null;
+        callback?.();
+      }
     }
-  }, [updateState]);
+  }, []);
 
-  // Initialize audio recording
-  const initializeAudio = useCallback(async () => {
+  const initializeAudio = useCallback(async (): Promise<boolean> => {
+    if (recorderRef.current) return true;
+
     try {
-      // Request microphone access with enhanced audio settings
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
-          autoGainControl: true, // Enable AGC to boost quiet microphones
-          sampleRate: 48000, // Higher sample rate for better quality
-          channelCount: 1 // Mono
+          autoGainControl: true,
+          sampleRate: 48000,
+          channelCount: 1
         }
       });
 
       mediaStreamRef.current = stream;
 
-      // Create audio context for real-time level monitoring
-      const AudioContextCtor = window.AudioContext ?? window.webkitAudioContext;
-      if (!AudioContextCtor) {
-        throw new Error('AudioContext is not supported in this environment');
-      }
-      const audioContext = new AudioContextCtor();
-      audioContextRef.current = audioContext;
-
-      const analyser = audioContext.createAnalyser();
-      analyser.fftSize = 256;
-      analyser.smoothingTimeConstant = 0.7; // Reduced from 0.8 for faster response to speech changes
-
-      const source = audioContext.createMediaStreamSource(stream);
-      source.connect(analyser);
-      analyserRef.current = analyser;
-
-      // Create MediaRecorder for audio chunks
-      const mediaRecorder = new MediaRecorder(stream, {
-        mimeType: 'audio/webm;codecs=opus'
-      });
-
-      mediaRecorder.ondataavailable = (event: BlobEvent) => {
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
-        }
-      };
-
-      mediaRecorder.onstop = async () => {
-        // Audio recording stopped, send to whisper
-        if (audioChunksRef.current.length === 0) {
-          updateState('idle');
-          return;
-        }
-
-        updateState('processing');
-        await transcribeAudio();
-      };
-
-      mediaRecorderRef.current = mediaRecorder;
+      const recorder = new AudioContextRecorder();
+      await recorder.init(stream);
+      recorder.setChunkListener((chunk) => processAudioChunk(chunk));
+      recorderRef.current = recorder;
 
       return true;
     } catch (error: unknown) {
-      const errorMsg = error instanceof Error ? error.message : 'Failed to access microphone';
-      updateState('error', errorMsg);
+      const errorMessage = error instanceof Error ? error.message : 'Failed to access microphone';
+      updateState('error', errorMessage);
       return false;
     }
-  }, [updateState, transcribeAudio]);
+  }, [processAudioChunk, updateState]);
 
-  // Monitor audio levels and detect silence
-  const startAudioLevelMonitoring = useCallback(() => {
-    if (!analyserRef.current || !mediaRecorderRef.current) {
-      return;
-    }
-
-    const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
-    let consecutiveSilenceFrames = 0;
-    let initialSoundDetected = false; // Track if we've heard any sound yet
-    const SILENCE_SENSITIVITY = 0.005; // Audio level threshold for silence (0.5% - less aggressive)
-    const SPEECH_START_THRESHOLD = 0.015; // Require 1.5% level to confirm speech started
-    const FRAMES_FOR_SILENCE = Math.ceil(silenceThresholdMs / 50); // ~50ms per frame
-
-    voiceLog(`[VoiceInput] Starting audio monitoring - silence threshold: ${SILENCE_SENSITIVITY}, speech start: ${SPEECH_START_THRESHOLD}, frames needed: ${FRAMES_FOR_SILENCE}`);
-
-    const monitorLevel = () => {
-      // Check if recording is still active (don't rely on stale state)
-      if (!analyserRef.current || !mediaRecorderRef.current || mediaRecorderRef.current.state !== 'recording') {
-        return;
-      }
-
-      analyserRef.current.getByteFrequencyData(dataArray);
-
-      // Calculate average frequency level
-      let sum = 0;
-      for (let i = 0; i < dataArray.length; i++) {
-        sum += dataArray[i];
-      }
-      const level = sum / dataArray.length / 255;
-      lastAudioLevelRef.current = level;
-
-      const now = performance.now();
-      if (now - lastUiUpdateRef.current >= 50) {
-        lastUiUpdateRef.current = now;
-        setVoiceState(prev => ({
-          ...prev,
-          audioLevel: level
-        }));
-      }
-
-      // Detect if user has started speaking (need higher threshold to confirm speech)
-      if (!initialSoundDetected && level > SPEECH_START_THRESHOLD) {
-        initialSoundDetected = true;
-        voiceLog(`[VoiceInput] Speech start detected (level: ${level.toFixed(4)})`);
-      }
-
-      // Only start counting silence AFTER we've detected initial speech
-      // This prevents stopping recording during the delay before user starts speaking
-      if (initialSoundDetected) {
-        // Detect silence: if level is below threshold, increment counter
-        if (level < SILENCE_SENSITIVITY) {
-          consecutiveSilenceFrames++;
-          if (consecutiveSilenceFrames % 20 === 0) {
-            voiceLog(`[VoiceInput] Silence frames: ${consecutiveSilenceFrames}/${FRAMES_FOR_SILENCE}, level: ${level.toFixed(4)}`);
-          }
-        } else {
-          // Reset silence counter when sound is detected
-          if (consecutiveSilenceFrames > 0) {
-            voiceLog(`[VoiceInput] Sound detected (level: ${level.toFixed(4)}) - resetting silence counter`);
-          }
-          consecutiveSilenceFrames = 0;
-        }
-
-        // If we've detected silence for the threshold duration, stop recording
-        if (consecutiveSilenceFrames >= FRAMES_FOR_SILENCE && mediaRecorderRef.current?.state === 'recording') {
-          voiceLog(`[VoiceInput] Silence detected (${consecutiveSilenceFrames} frames) - stopping recording`);
-          mediaRecorderRef.current.stop();
-          return; // Stop monitoring
-        }
-      }
-
-      requestAnimationFrame(monitorLevel);
-    };
-
-    monitorLevel();
-  }, [silenceThresholdMs]);
-
-
-  // Start listening (called when voice toggle is turned ON)
   const startListening = useCallback(async () => {
-    try {
-      setVoiceState(prev => ({
-        ...prev,
-        isEnabled: true,
-        error: null,
-        transcript: ''
-      }));
+    const initialized = await initializeAudio();
+    if (!initialized) return;
 
-      // Initialize audio if not already done
-      if (!mediaRecorderRef.current) {
-        const initialized = await initializeAudio();
-        if (!initialized) {
-          return;
-        }
-      }
+    if (isRecordingRef.current) return;
 
-      // Start recording
-      if (mediaRecorderRef.current?.state !== 'recording') {
-        audioChunksRef.current = [];
-        mediaRecorderRef.current?.start();
-      }
+    isEnabledRef.current = true;
+    isRecordingRef.current = true;
+    stopRequestedRef.current = false;
+    interruptCallbackRef.current = null;
+    detectionStateRef.current = initialDetectionState(microphoneSensitivityRef.current);
 
-      updateState('listening');
-      startAudioLevelMonitoring();
+    recorderRef.current?.start();
+    updateState('listening');
 
-    } catch (error: unknown) {
-      const errorMsg = error instanceof Error ? error.message : 'Failed to start listening';
-      updateState('error', errorMsg);
-    }
-  }, [initializeAudio, updateState, startAudioLevelMonitoring]);
+    setVoiceState((prev) => ({
+      ...prev,
+      isEnabled: true,
+      isRecording: true,
+      error: null
+    }));
+  }, [initializeAudio, updateState]);
 
-  // Stop listening (called when voice toggle is turned OFF or AI starts speaking)
   const stopListening = useCallback(() => {
-    try {
-      // Stop recording
-      if (mediaRecorderRef.current?.state === 'recording') {
-        mediaRecorderRef.current.stop();
-      }
+    interruptCallbackRef.current = null;
+    isEnabledRef.current = false;
 
-      // Clear any pending silence timeouts
-      clearSilenceTimeout();
-
-      setVoiceState(prev => ({
-        ...prev,
-        isEnabled: false,
-        audioLevel: 0
-      }));
-
+    if (isRecordingRef.current) {
+      void finalizeRecording(false);
+    } else {
       updateState('idle');
-
-    } catch (error: unknown) {
-      const errorMsg = error instanceof Error ? error.message : 'Failed to stop listening';
-      voiceWarn('[VoiceInput] Stop error:', errorMsg);
     }
-  }, [updateState, clearSilenceTimeout]);
 
-  // Resume listening after AI response (for seamless conversation loop)
+    setVoiceState((prev) => ({
+      ...prev,
+      isEnabled: false,
+      isRecording: false,
+      audioLevel: 0
+    }));
+  }, [finalizeRecording, updateState]);
+
   const resumeListening = useCallback(async () => {
-    if (voiceState.isEnabled) {
-      // Small delay to ensure TTS is fully finished
-      await new Promise(resolve => setTimeout(resolve, 500));
-      await startListening();
-    }
-  }, [voiceState.isEnabled, startListening]);
+    if (!isEnabledRef.current) return;
+    await startListening();
+  }, [startListening]);
 
-  // Cleanup on unmount
+  const startInterruptDetection = useCallback((onInterrupt: () => void) => {
+    interruptCallbackRef.current = onInterrupt;
+    detectionStateRef.current.interruptSpeechMs = 0;
+  }, []);
+
+  const stopInterruptDetection = useCallback(() => {
+    interruptCallbackRef.current = null;
+    detectionStateRef.current.interruptSpeechMs = 0;
+  }, []);
+
   useEffect(() => {
     return () => {
-      // Clean up without triggering state updates
-      try {
-        // Stop recording
-        if (mediaRecorderRef.current?.state === 'recording') {
-          mediaRecorderRef.current.stop();
-        }
+      mountedRef.current = false;
 
-        // Clear any pending silence timeouts
-        clearSilenceTimeout();
+      interruptCallbackRef.current = null;
+      isEnabledRef.current = false;
+      isRecordingRef.current = false;
+
+      try {
+        recorderRef.current?.setChunkListener(null);
+        recorderRef.current?.cleanup();
       } catch (error) {
-        voiceWarn('[VoiceInput] Cleanup error:', error);
+        voiceWarn('[VoiceInput] Recorder cleanup error:', error);
       }
 
-      // Clean up media stream
       if (mediaStreamRef.current) {
-        mediaStreamRef.current.getTracks().forEach(track => track.stop());
+        mediaStreamRef.current.getTracks().forEach((track) => track.stop());
         mediaStreamRef.current = null;
       }
-
-      // Close audio context
-      if (audioContextRef.current?.state !== 'closed') {
-        audioContextRef.current?.close();
-      }
     };
-  }, [clearSilenceTimeout]); // Only run on unmount to avoid infinite loops
+  }, []);
 
   return {
-    // State
     state: voiceState.state,
     isEnabled: voiceState.isEnabled,
+    isRecording: voiceState.isRecording,
     transcript: voiceState.transcript,
+    transcriptionConfidence: voiceState.transcriptionConfidence,
     audioLevel: voiceState.audioLevel,
     error: voiceState.error,
 
-    // Controls
     startListening,
     stopListening,
     resumeListening,
-    clearTranscript: () => setVoiceState(prev => ({ ...prev, transcript: '' }))
+    startInterruptDetection,
+    stopInterruptDetection,
+    clearTranscript: () =>
+      setVoiceState((prev) => ({
+        ...prev,
+        transcript: '',
+        transcriptionConfidence: null
+      }))
   };
 }

@@ -311,3 +311,77 @@ Remaining items marked as future enhancements:
 - Content ingestion (textbooks, surgical guides) - requires licensed content
 - Condition-aware retrieval - future enhancement
 - Protocol versioning - future enhancement
+
+---
+
+## 2026-02-06
+Phase: 4 (Voice & Interaction — Hands-Free Research)
+
+Summary:
+- Replaced per-request STT process execution with a persistent STT service layer that prefers `whisper.cpp` server and falls back to a persistent Whisper worker.
+- Replaced per-request Piper TTS process spawning with a persistent Piper worker process and in-memory audio transport.
+- Removed WebM-to-WAV runtime conversion from live voice flow by recording directly via `AudioWorklet` and posting WAV bytes to STT.
+- Implemented adaptive silence detection using dynamic noise-floor calibration and threshold adjustment.
+- Added user-configurable microphone sensitivity (desktop and mobile toolbar).
+- Added interruption (barge-in) handling so user speech can stop ongoing TTS playback and resume capture immediately.
+- Added explicit STT processing status and transcription confidence indicators in voice UI.
+- Updated roadmap to mark all Phase 4 checklist items complete.
+
+Changes:
+- `app/api/stt/route.ts`
+- `app/api/piper-tts/route.ts`
+- `app/lib/voice/server/jsonLineWorker.ts`
+- `app/lib/voice/server/sttService.ts`
+- `app/lib/voice/server/piperService.ts`
+- `scripts/voice/whisper_worker.py`
+- `scripts/voice/piper_worker.py`
+- `app/lib/voice/audioRecorder.ts`
+- `app/lib/voice/useVoiceInput.ts`
+- `app/lib/voice/useVoiceOutput.ts`
+- `app/lib/voice/useVoiceFlow.ts`
+- `components/VoicePanel.tsx`
+- `components/LeftToolbar.tsx`
+- `components/Chat.tsx`
+- `docs/audits/ROADMAP.md`
+
+Notes:
+- STT backend behavior is configurable. Default mode attempts `whisper.cpp` server first and falls back to the persistent Whisper worker when unavailable.
+- New tuning/config options include: `STT_BACKEND_PREFERENCE`, `WHISPER_SERVER_URL`, `WHISPER_SERVER_COMMAND`, `WHISPER_SERVER_ARGS`, `WHISPER_MODEL`, `WHISPER_DEVICE`, `PIPER_PYTHON_CMD`, `PIPER_MODELS_DIR`, `PIPER_LENGTH_SCALE`, `PIPER_VOLUME`, and `DEBUG_VOICE_SERVER`.
+- Worker scripts were smoke-tested locally (Whisper and Piper) with successful ready handshake and request/response cycles.
+
+---
+
+## 2026-02-07
+Phase: 1-5 Final Verification and Completion
+
+Summary:
+- Verified M4 hardware validation (user-confirmed functional)
+- Audited all Phase 1-5 implementations for completeness
+- Added theme detection caching with 30s TTL to complete Phase 2 optimizations
+- Confirmed LRU cache and 10-bucket parameter tuner were already implemented
+
+Changes:
+- `app/lib/strategy/context.ts` - Added `getCachedDetection()` with 30s TTL cache and `clearDetectionCache()` helper
+- `docs/audits/ROADMAP.md` - Marked M4 hardware validation complete
+
+### Phase Status Summary
+
+| Phase | Status | Notes |
+|-------|--------|-------|
+| Phase 1: Clinical Intelligence Foundation | ✅ 100% Complete | M4 validated |
+| Phase 2: Performance Optimization | ✅ 100% Complete | All optimizations implemented |
+| Phase 3: Patient Cases & Clinical Knowledge | ✅ 100% Complete | Full case/knowledge/imaging system |
+| Phase 4: Voice & Interaction | ✅ 100% Complete | Persistent STT/TTS workers |
+| Phase 5: Clinical Knowledge Base | ✅ 100% Complete | PubMed/Cochrane/guidelines integration |
+
+### Verified Implementations
+
+**Phase 2 Optimizations Verified:**
+- LRU cache with access-time tracking: `app/lib/memory/rag/embeddings.ts:160-173`
+- Theme detection cache (30s TTL): `app/lib/strategy/context.ts:17-56`
+- 10-bucket parameter tuner: `app/lib/learning/parameterTuner.ts:69-70`
+- Weighted interpolation: `app/lib/learning/parameterTuner.ts:368-430`
+
+**Remaining Work (Future Phases):**
+- Automated unit/integration tests (no test framework configured)
+- Phase 6-8 features per roadmap

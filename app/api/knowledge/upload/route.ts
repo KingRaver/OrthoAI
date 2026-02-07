@@ -1,11 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getKnowledgeManager } from '@/app/lib/knowledge';
 import { getPdfParser } from '@/app/lib/knowledge/parsers/pdfParser';
+import { initializeStorage } from '@/app/lib/memory';
+import { getClinicalKnowledgeBase } from '@/app/lib/knowledge/clinicalKnowledgeBase';
 
 export const runtime = 'nodejs';
 
 export async function POST(req: NextRequest) {
   try {
+    await initializeStorage();
+
     const formData = await req.formData();
     const file = formData.get('file') as File | null;
     const title = formData.get('title') as string | null;
@@ -74,6 +78,9 @@ export async function POST(req: NextRequest) {
       contentType,
       publishedAt: publishedAt || null
     });
+
+    // Keep local cache bounded after large ingest operations.
+    void getClinicalKnowledgeBase().enforceStoragePolicy();
 
     return NextResponse.json({
       document,

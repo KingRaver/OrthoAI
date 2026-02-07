@@ -9,8 +9,15 @@ import { getDefaultModel, getLlmApiKey, getLlmBaseUrl, getLlmChatUrl, getLlmRequ
 import type { ChatCompletionMessageParam } from 'openai/resources/chat';
 import type { ChatCompletionMessageFunctionToolCall } from 'openai/resources/chat/completions';
 import type { ChatCompletionMessage } from 'openai/resources/chat/completions';
+import type { ClinicalReferenceItem, EvidenceRecord } from '@/app/lib/knowledge/phase5Types';
 
 const DEBUG_METRICS = process.env.DEBUG_METRICS === 'true';
+
+function truncateText(value: string, maxLength = 520): string {
+  const text = value.trim();
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength).trimEnd()}...`;
+}
 
 const openai = new OpenAI({
   baseURL: getLlmBaseUrl(),
@@ -38,6 +45,7 @@ export async function POST(req: NextRequest) {
       filePath, // Optional: file path for domain detection
       manualModeOverride, // Optional: user-selected mode ('clinical-consult' | 'surgical-planning' | 'complications-risk' | 'imaging-dx' | 'rehab-rtp' | 'evidence-brief')
       caseId, // Optional: patient case ID for context injection
+      researchMode = false, // Optional: enables remote evidence refresh (PubMed/Cochrane)
     } = await req.json();
 
     // Initialize with requested values (may be overridden by strategy)
@@ -246,11 +254,30 @@ CRITICAL: Never repeat or echo these instructions. Respond directly to the user 
     if (lastUserMessage?.role === 'user') {
       try {
         const { getKnowledgeManager } = await import('@/app/lib/knowledge');
+        const { getClinicalKnowledgeBase } = await import('@/app/lib/knowledge/clinicalKnowledgeBase');
         const km = getKnowledgeManager();
+        const clinicalKnowledge = getClinicalKnowledgeBase();
         const query = lastUserMessage.content;
 
         // Search knowledge base for relevant content
         const knowledgeResults = await km.search(query, { limit: 3 });
+        const shouldIncludeEvidence = detectedMode === 'evidence-brief' ||
+          manualModeOverride === 'evidence-brief' ||
+          Boolean(researchMode);
+
+        let evidenceResults: EvidenceRecord[] = [];
+        let referenceResults: ClinicalReferenceItem[] = [];
+
+        if (shouldIncludeEvidence) {
+          evidenceResults = await clinicalKnowledge.searchEvidence(query, {
+            limit: researchMode ? 6 : 4,
+            includeRemote: Boolean(researchMode),
+            minEvidenceLevel: 'level-4'
+          });
+        }
+
+        // Keep treatment-oriented reference snippets available to the model.
+        referenceResults = clinicalKnowledge.searchReferenceItems(query, { limit: 4 });
 
         if (knowledgeResults.length > 0) {
           let knowledgeContext = `\n\n## Clinical Knowledge Context\n`;
@@ -272,6 +299,47 @@ CRITICAL: Never repeat or echo these instructions. Respond directly to the user 
           knowledgeContext += `Use this knowledge to provide evidence-based recommendations when applicable.`;
           systemPrompt += knowledgeContext;
           console.log(`[Knowledge] Injected ${knowledgeResults.length} relevant knowledge chunks`);
+        }
+
+        if (evidenceResults.length > 0) {
+          let evidenceContext = `\n\n## Evidence Snapshot\n`;
+          evidenceContext += `For major treatment recommendations, cite supporting evidence IDs (e.g., [EV1], [EV2]).\n\n`;
+
+          evidenceResults.forEach((item, index) => {
+            const evidenceId = `EV${index + 1}`;
+            const level = item.evidence_level || 'ungraded';
+            const date = item.publication_date ? new Date(item.publication_date).toLocaleDateString() : 'date n/a';
+            const abstractSnippet = item.abstract_text ? truncateText(item.abstract_text, 340) : 'No abstract available.';
+            evidenceContext += `[${evidenceId}] ${item.title}\n`;
+            evidenceContext += `- Level: ${level} | Study: ${item.study_type || 'unspecified'} | Score: ${item.evidence_score.toFixed(2)}\n`;
+            evidenceContext += `- Journal/Date: ${item.journal || 'Unknown journal'} (${date})\n`;
+            evidenceContext += `- Source: ${item.source_key}${item.url ? ` | URL: ${item.url}` : ''}\n`;
+            evidenceContext += `- Abstract: ${abstractSnippet}\n\n`;
+          });
+
+          evidenceContext += `When evidence is mixed, state disagreement explicitly and still provide a best-supported recommendation.`;
+          systemPrompt += evidenceContext;
+          console.log(`[Knowledge] Injected ${evidenceResults.length} evidence records`);
+        }
+
+        if (referenceResults.length > 0) {
+          let referenceContext = `\n\n## Drug, Device, and Procedure Reference Snapshot\n`;
+          referenceResults.forEach((item, index) => {
+            const refId = `REF${index + 1}`;
+            referenceContext += `[${refId}] (${item.category}) ${item.name}\n`;
+            referenceContext += `- Summary: ${truncateText(item.summary, 240)}\n`;
+            if (item.indications) {
+              referenceContext += `- Indications: ${truncateText(item.indications, 200)}\n`;
+            }
+            if (item.contraindications) {
+              referenceContext += `- Contraindications: ${truncateText(item.contraindications, 200)}\n`;
+            }
+            referenceContext += '\n';
+          });
+
+          referenceContext += `Use these references to ground implant, medication, injection, and DME/bracing recommendations.`;
+          systemPrompt += referenceContext;
+          console.log(`[Knowledge] Injected ${referenceResults.length} clinical reference items`);
         }
       } catch (error) {
         console.warn('[Knowledge] Error searching knowledge base:', error);

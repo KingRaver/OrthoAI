@@ -1,3 +1,6 @@
+STRICTLY FOR MY UNDERSTANDING AND NOT BUILD OR DESIGN GUIDELINES
+MANY OF THE DECISIONS ARE INTENTIONAL AS THIS IS NOT BEING USED BY ANYONE BUT MYSELF CURRENTLY AND IS STILL UNDERDEVELOPMENT
+
 **Compliance Audit**
 Date: February 6, 2026
 Scope reviewed: `app/api/llm/route.ts`, `app/lib/domain/*`, `app/lib/memory/*`, `app/lib/knowledge/*`, `app/lib/cases/*`, `app/lib/strategy/*`, `components/*`, `docs/BUILD_DECISIONS.md`, `docs/REFACTOR.md`.

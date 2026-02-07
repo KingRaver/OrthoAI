@@ -8,6 +8,58 @@ import { getSystemResources } from './resources/monitor';
  * Bridges domain detection with strategy system
  */
 
+/**
+ * Theme/Context Detection Cache with TTL
+ * Caches detection results per conversation to avoid redundant pattern matching
+ */
+interface DetectionCacheEntry {
+  result: ReturnType<typeof ContextDetector.detect>;
+  timestamp: number;
+}
+
+const detectionCache = new Map<string, DetectionCacheEntry>();
+const DETECTION_CACHE_TTL_MS = 30_000; // 30 seconds
+
+function getCachedDetection(
+  cacheKey: string,
+  userMessage: string,
+  filePath?: string
+): ReturnType<typeof ContextDetector.detect> {
+  const now = Date.now();
+  const cached = detectionCache.get(cacheKey);
+
+  if (cached && (now - cached.timestamp) < DETECTION_CACHE_TTL_MS) {
+    return cached.result;
+  }
+
+  // Cache miss or expired - compute fresh detection
+  const result = ContextDetector.detect(userMessage, filePath);
+  detectionCache.set(cacheKey, { result, timestamp: now });
+
+  // Prune old entries periodically (every 100 entries)
+  if (detectionCache.size > 100) {
+    Array.from(detectionCache.entries()).forEach(([key, entry]) => {
+      if ((now - entry.timestamp) > DETECTION_CACHE_TTL_MS) {
+        detectionCache.delete(key);
+      }
+    });
+  }
+
+  return result;
+}
+
+export function clearDetectionCache(conversationId?: string): void {
+  if (conversationId) {
+    Array.from(detectionCache.keys()).forEach(key => {
+      if (key.startsWith(conversationId)) {
+        detectionCache.delete(key);
+      }
+    });
+  } else {
+    detectionCache.clear();
+  }
+}
+
 interface ModelInfo {
   name: string;
   displayName: string;
@@ -78,11 +130,11 @@ export async function buildStrategyContext(params: {
   manualModelOverride?: string;
   conversationId?: string;
 }): Promise<StrategyContext> {
-  // 1. Use existing context detector
-  const detection = ContextDetector.detect(
-    params.userMessage,
-    params.filePath
-  );
+  // 1. Use cached context detection (30s TTL per conversation)
+  const cacheKey = params.conversationId
+    ? `${params.conversationId}:${params.userMessage.slice(0, 100)}`
+    : params.userMessage.slice(0, 100);
+  const detection = getCachedDetection(cacheKey, params.userMessage, params.filePath);
 
   // Enhanced complexity score (0-100 scale)
   const complexityScore = calculateComplexityScore(detection.complexity, params.userMessage);
