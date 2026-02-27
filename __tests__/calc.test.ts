@@ -24,4 +24,16 @@ describe('calculator', () => {
   it('throws error for missing expression', async () => {
     await expect(calculator({} as { expression: string })).rejects.toThrow('Invalid expression: missing expression')
   })
+
+  it('throws for non-finite results like Infinity (division by zero)', async () => {
+    await expect(calculator({ expression: '1 / 0' })).rejects.toThrow(
+      'did not evaluate to a finite number'
+    )
+  })
+
+  it('throws for non-string expression argument', async () => {
+    await expect(
+      calculator({ expression: 42 } as unknown as { expression: string })
+    ).rejects.toThrow('Invalid expression: missing expression')
+  })
 })
