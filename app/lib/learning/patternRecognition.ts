@@ -304,7 +304,7 @@ export class PatternRecognizer {
     if (complexity >= 65) {
       return 'biomistral-7b-instruct';
     } else {
-      return 'biogpt';
+      return 'meditron-7b';
     }
   }
 

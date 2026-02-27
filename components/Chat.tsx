@@ -112,6 +112,7 @@ interface Message {
     responseTime?: number;
     tokensUsed?: number;
     mode?: string; // Track interaction mode (clinical-consult, surgical-planning, complications-risk, imaging-dx, rehab-rtp, evidence-brief, auto)
+    modeInteractionId?: string;
   };
 }
 
@@ -119,6 +120,8 @@ type LearningContext = NonNullable<Message['learningContext']>;
 type StreamMetadata = {
   type: 'metadata';
   decisionId?: string;
+  modeInteractionId?: string;
+  modeUsed?: string;
   conversationId?: string;
   theme?: string;
   complexity?: number;
@@ -134,7 +137,7 @@ const isStreamMetadata = (value: unknown): value is StreamMetadata => {
 
 export default function Chat() {
   const DEFAULT_MODEL = 'biomistral-7b-instruct';
-  const WORKFLOW_LABEL = 'BioGPT + BioMistral';
+  const WORKFLOW_LABEL = 'Meditron + BioMistral';
   const MESSAGE_WINDOW_STEP = 50;
 
   // State Management - Chat owns conversation state
@@ -330,7 +333,8 @@ export default function Chat() {
             modelUsed: data.model || data.autoSelectedModel || DEFAULT_MODEL,
             responseTime,
             tokensUsed: Math.floor(content.length / 4), // Rough estimate
-            mode: data.modeUsed || currentSettings.manualMode || 'auto' // Track which mode was used
+            mode: data.modeUsed || currentSettings.manualMode || 'auto', // Track which mode was used
+            modeInteractionId: data.modeInteractionId || aiId,
           }
         };
 
@@ -348,6 +352,7 @@ export default function Chat() {
       } else {
         // Streaming response (tools disabled)
         let streamDecisionId: string | undefined = undefined;
+        let streamModeInteractionId: string | undefined = undefined;
         let streamLearningContext: LearningContext | undefined = undefined;
 
         const aiMsg: Message = { id: aiId, role: 'assistant', content: '' };
@@ -376,9 +381,14 @@ export default function Chat() {
                   try {
                     const parsed: unknown = JSON.parse(data);
 
-                    // Check for metadata message with decision ID
-                    if (isStreamMetadata(parsed) && parsed.decisionId) {
-                      streamDecisionId = parsed.decisionId;
+                    // Check for metadata chunk
+                    if (isStreamMetadata(parsed)) {
+                      if (parsed.decisionId) {
+                        streamDecisionId = parsed.decisionId;
+                      }
+                      if (parsed.modeInteractionId) {
+                        streamModeInteractionId = parsed.modeInteractionId;
+                      }
                       if (parsed.conversationId) {
                         setConversationId(parsed.conversationId);
                       }
@@ -391,7 +401,8 @@ export default function Chat() {
                         modelUsed: parsed.modelUsed || DEFAULT_MODEL,
                         responseTime: 0,
                         tokensUsed: 0,
-                        mode: currentSettings.manualMode || 'auto'
+                        mode: parsed.modeUsed || currentSettings.manualMode || 'auto',
+                        modeInteractionId: parsed.modeInteractionId || aiId,
                       };
                       continue; // Skip rendering this metadata chunk
                     }
@@ -420,8 +431,13 @@ export default function Chat() {
               if (data !== '[DONE]') {
                 try {
                   const parsed: unknown = JSON.parse(data);
-                  if (isStreamMetadata(parsed) && parsed.decisionId) {
-                    streamDecisionId = parsed.decisionId;
+                  if (isStreamMetadata(parsed)) {
+                    if (parsed.decisionId) {
+                      streamDecisionId = parsed.decisionId;
+                    }
+                    if (parsed.modeInteractionId) {
+                      streamModeInteractionId = parsed.modeInteractionId;
+                    }
                     if (parsed.conversationId) {
                       setConversationId(parsed.conversationId);
                     }
@@ -434,7 +450,8 @@ export default function Chat() {
                       modelUsed: parsed.modelUsed || DEFAULT_MODEL,
                       responseTime: 0,
                       tokensUsed: 0,
-                      mode: currentSettings.manualMode || 'auto'
+                      mode: parsed.modeUsed || currentSettings.manualMode || 'auto',
+                      modeInteractionId: parsed.modeInteractionId || aiId,
                     };
                   } else {
                     const content = (parsed as { choices?: Array<{ delta?: { content?: string } }> })
@@ -457,6 +474,7 @@ export default function Chat() {
             // After streaming completes, update message with decision ID and learning context
             // Always set decisionId (even for manual mode) to enable voting
             const finalDecisionId = streamDecisionId || aiId;
+            const finalModeInteractionId = streamModeInteractionId || aiId;
             const responseTime = Date.now() - requestStartTime;
             setMessages(prev => prev.map(msg =>
               msg.id === aiId
@@ -467,7 +485,8 @@ export default function Chat() {
                       modelUsed: DEFAULT_MODEL,
                       responseTime,
                       tokensUsed: Math.floor(fullContent.length / 4),
-                      mode: currentSettings.manualMode || 'auto'
+                      mode: currentSettings.manualMode || 'auto',
+                      modeInteractionId: finalModeInteractionId,
                     }
                   }
                 : msg
@@ -533,6 +552,7 @@ export default function Chat() {
         body: JSON.stringify({
           messageId,
           decisionId: message.decisionId,
+          modeInteractionId: message.learningContext?.modeInteractionId,
           feedback,
           content: message.content,
           timestamp: new Date().toISOString(),

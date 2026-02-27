@@ -22,6 +22,7 @@ export async function POST(req: NextRequest) {
     const {
       messageId,
       decisionId,
+      modeInteractionId,
       feedback,
       content,
       timestamp,
@@ -35,7 +36,7 @@ export async function POST(req: NextRequest) {
       responseTime,
       tokensUsed,
       userMessage,
-      mode // Track interaction mode (clinical-consult, surgical-planning, complications-risk, imaging-dx, rehab-rtp, evidence-brief, auto)
+      mode // Track interaction mode (clinical-consult, treatment-decision, surgical-planning, complications-risk, imaging-dx, rehab-rtp, evidence-brief, auto)
     } = await req.json();
 
     if (!feedback) {
@@ -122,9 +123,18 @@ export async function POST(req: NextRequest) {
     }
 
     // Record mode interaction feedback (for clinical-consult, surgical-planning, complications-risk, imaging-dx, rehab-rtp, evidence-brief, auto modes)
-    if (mode) {
-      await modeAnalytics.updateFeedback(decisionId, feedback);
-      console.log(`[Feedback] Mode ${mode} feedback: ${feedback} (quality: ${qualityScore})`);
+    const resolvedModeInteractionId =
+      typeof modeInteractionId === 'string' && modeInteractionId.startsWith('mode_')
+        ? modeInteractionId
+        : (typeof decisionId === 'string' && decisionId.startsWith('mode_') ? decisionId : null);
+
+    if (resolvedModeInteractionId && !mode) {
+      console.warn('[Feedback] modeInteractionId present but mode field missing — mode analytics update skipped');
+    }
+
+    if (mode && resolvedModeInteractionId) {
+      await modeAnalytics.updateFeedback(resolvedModeInteractionId, feedback);
+      console.log(`[Feedback] Mode ${mode} feedback: ${feedback} (quality: ${qualityScore}) via ${resolvedModeInteractionId}`);
     }
 
     console.log(`[Feedback] User ${feedback} feedback recorded for decision ${decisionId} (theme: ${theme}, mode: ${mode || 'none'}, quality: ${qualityScore})`);

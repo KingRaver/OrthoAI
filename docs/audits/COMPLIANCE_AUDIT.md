@@ -3,12 +3,12 @@ MANY OF THE DECISIONS ARE INTENTIONAL AS THIS IS NOT BEING USED BY ANYONE BUT MY
 
 **Compliance Audit**
 Date: February 6, 2026
-Scope reviewed: `app/api/llm/route.ts`, `app/lib/domain/*`, `app/lib/memory/*`, `app/lib/knowledge/*`, `app/lib/cases/*`, `app/lib/strategy/*`, `components/*`, `docs/BUILD_DECISIONS.md`, `docs/REFACTOR.md`.
+Scope reviewed: `app/api/llm/route.ts`, `app/lib/domain/*`, `app/lib/memory/*`, `app/lib/knowledge/*`, `app/lib/cases/*`, `app/lib/strategy/*`, `components/*`, and selected internal planning notes.
 Assumptions: Local-first deployment, but network exposure is possible unless explicitly restricted to localhost.
 
 **Top Risks**
 1. **Clinical Authority Without Guardrails**
-   How it could occur: The base system prompt explicitly frames OrthoAI as an “attending orthopedic surgeon and clinical advisor” and every mode is “attending-level,” while docs explicitly reject “not medical advice” guardrails. A patient or non-specialist user can receive prescriptive clinical recommendations, including surgery planning, and treat them as authoritative. This creates direct risk of unsafe self-management, delay in care, or inappropriate procedures. Evidence: `app/lib/domain/contextBuilder.ts`, `app/lib/domain/modeDefinitions.ts`, `docs/BUILD_DECISIONS.md`, `docs/REFACTOR.md`.
+   How it could occur: The base system prompt explicitly frames OrthoAI as an “attending orthopedic surgeon and clinical advisor” and every mode is “attending-level,” with no patient-facing disclaimer/role-boundary guardrails in prompt or UI paths. A patient or non-specialist user can receive prescriptive clinical recommendations, including surgery planning, and treat them as authoritative. This creates direct risk of unsafe self-management, delay in care, or inappropriate procedures. Evidence: `app/lib/domain/contextBuilder.ts`, `app/lib/domain/modeDefinitions.ts`, `app/api/llm/route.ts`.
    Mitigations: Add explicit role boundaries in system and UI copy; require clinician attestation or a “research-only” mode; block prescriptive dosing or procedural instructions for non-clinician sessions; add a visible “informational only” banner and contextual warnings for diagnosis/management requests.
 
 2. **No Emergency Triage or Red-Flag Safeguards**
@@ -48,9 +48,8 @@ Assumptions: Local-first deployment, but network exposure is possible unless exp
    Mitigations: Require transcript confirmation before sending; highlight low-confidence segments; disable auto-resume for clinical modes; provide a “review before save” toggle for memory when voice is enabled.
 
 **Unknown Unknowns**
-- Model validation status is unclear: no evidence of clinical safety evaluations, red-team testing, or benchmark results for rare/edge orthopedic conditions. Risk may be substantially higher than expected if model performance is weak. Evidence of missing evaluation work: `docs/REFACTOR.md` (evaluation listed as future work).
-- RAG content quality and provenance are unknown: ingestion pipeline is planned but not implemented, and there is no evidence grading or citation fidelity enforcement. If low-quality or outdated sources are ingested, error rates could spike. Evidence: `docs/BUILD_DECISIONS.md`, `docs/FUTURE.md`.
+- Model validation status is unclear: no published clinical safety evaluations, red-team testing outputs, or benchmark result reports for rare/edge orthopedic conditions were found in public repo artifacts. Risk may be substantially higher than expected if model performance is weak. Evidence: `docs/audits/CLINICAL_REASONING_BENCHMARK.md`, `__tests__/*`.
+- RAG content quality and provenance controls are partial: remote evidence sync exists, but strict citation-fidelity enforcement and source quality gates are not hard-enforced at generation time. If low-quality or outdated sources are ingested, error rates could spike. Evidence: `app/lib/knowledge/clinicalKnowledgeBase.ts`, `app/lib/knowledge/evidence/ranking.ts`, `app/api/llm/route.ts`.
 - External endpoint usage is not enforced: if `LLM_BASE_URL` or embedding endpoints point to a remote service, PHI could leave the device without explicit warning or consent. Evidence: `app/lib/llm/config.ts`.
 - Operational security posture is undefined: backup policies, log forwarding, and OS-level protections can make local storage effectively “shared,” but there are no controls in code to prevent it.
 - Voice/STT accuracy across accents, non-native speakers, and noisy environments is untested; risk of systematic errors is unknown.
-

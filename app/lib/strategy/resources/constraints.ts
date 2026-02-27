@@ -24,12 +24,12 @@ export class ResourceConstraints {
    * Select model based on available RAM
    */
   static downgradeForRAM(availableRAM: number): string {
-    if (availableRAM < 6000) return 'biogpt';      // lightweight
+    if (availableRAM < 6000) return 'meditron-7b'; // lightweight secondary
     return 'biomistral-7b-instruct';
   }
 
   static selectLowGPUModel(): string {
-    return 'biogpt'; // CPU-friendly
+    return 'meditron-7b'; // CPU-friendly secondary
   }
 
   /**

@@ -99,15 +99,15 @@ type DetectionMode =
 
 const DEFAULT_MODELS: ModelInfo[] = [
   {
-    name: 'biogpt',
-    displayName: 'BioGPT (Extraction)',
-    size: '3B',
+    name: 'meditron-7b',
+    displayName: 'Meditron 7B (Secondary)',
+    size: '7B',
     type: 'fast',
-    strengths: ['biomedical entity extraction', 'fast summaries'],
-    weaknesses: ['instruction following', 'long-form synthesis'],
-    ramRequired: 3000,
-    gpuRequired: false,
-    contextWindow: 4096
+    strengths: ['clinical extraction', 'compact summaries'],
+    weaknesses: ['long-form synthesis'],
+    ramRequired: 7000,
+    gpuRequired: true,
+    contextWindow: 8192
   },
   {
     name: 'biomistral-7b-instruct',

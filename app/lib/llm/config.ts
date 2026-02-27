@@ -27,7 +27,7 @@ export function getLlmChatUrl(): string {
  */
 
 function getModelEndpointFromEnv(model: string): string | undefined {
-  // Convert model name to env var format: biogpt -> BIOGPT, biomistral-7b-instruct -> BIOMISTRAL_7B_INSTRUCT
+  // Convert model name to env var format: meditron-7b -> MEDITRON_7B, biomistral-7b-instruct -> BIOMISTRAL_7B_INSTRUCT
   const envKey = `LLM_BASE_URL_${model.toUpperCase().replace(/-/g, '_')}`;
   return process.env[envKey];
 }

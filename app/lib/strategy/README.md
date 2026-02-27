@@ -2,7 +2,7 @@
 
 An intelligent multi-model orchestration system that automatically selects optimal models, parameters, and execution strategies based on task complexity, system resources, and historical performance.
 
-> **Note:** The system is now workflow-first and always-on. See `docs/FUTURE_STRATEGY.md` for the current design target and refactor template.
+> **Note:** The system is now workflow-first and always-on. See `app/lib/strategy/implementations/workflowStrategy.ts` and `app/lib/strategy/orchestrator.ts` for the current behavior.
 
 ## Overview
 

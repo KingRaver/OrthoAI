@@ -52,7 +52,7 @@ Uses:
 - Parameter tuning recommendations
 - System resource constraints
 
-To decide between BioMistral and BioGPT and set parameters.
+To decide between BioMistral and Meditron and set parameters.
 
 ### 6. Quality Prediction Model
 **Location**: `app/lib/learning/qualityPredictor.ts`

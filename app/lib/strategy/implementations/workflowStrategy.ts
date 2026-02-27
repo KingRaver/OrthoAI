@@ -91,10 +91,10 @@ export class WorkflowStrategy extends BaseStrategy {
     themeDetection: ThemeDetectionResult | null,
     parameterRec: TuningRecommendation | null
   ): StrategyDecision {
-    const ensembleModels = ['biomistral-7b-instruct', 'biogpt'];
+    const ensembleModels = ['biomistral-7b-instruct', 'meditron-7b'];
     const weights: Record<string, number> = {
       'biomistral-7b-instruct': 0.7,
-      'biogpt': 0.3
+      'meditron-7b': 0.3
     };
 
     const criticalThemes = ['guideline', 'surgery', 'comparative'];
