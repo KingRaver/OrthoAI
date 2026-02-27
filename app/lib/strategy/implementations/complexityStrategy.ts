@@ -5,7 +5,7 @@ import { StrategyAnalytics } from '../analytics/tracker';
 
 /**
  * Complexity-Based Strategy (MVP)
- * Simple → BioGPT, Moderate → BioMistral 7B, Complex → BioMistral 7B
+ * Simple → Meditron 7B, Moderate → BioMistral 7B, Complex → BioMistral 7B
  * NOW WITH FEEDBACK LEARNING: Adjusts complexity thresholds based on user satisfaction
  */
 

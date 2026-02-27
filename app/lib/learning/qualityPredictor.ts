@@ -216,13 +216,13 @@ export class QualityPredictor {
         'rehab-rtp': 0.83,
         'evidence-brief': 0.89
       },
-      'biogpt': {
-        'clinical-consult': 0.72,
-        'surgical-planning': 0.66,
-        'complications-risk': 0.65,
-        'imaging-dx': 0.74,
-        'rehab-rtp': 0.68,
-        'evidence-brief': 0.70
+      'meditron-7b': {
+        'clinical-consult': 0.80,
+        'surgical-planning': 0.76,
+        'complications-risk': 0.75,
+        'imaging-dx': 0.81,
+        'rehab-rtp': 0.78,
+        'evidence-brief': 0.79
       }
     };
 
@@ -255,7 +255,7 @@ export class QualityPredictor {
     // Heuristic: larger models handle complexity better
     if (model.includes('biomistral')) {
       return complexity > 70 ? 0.90 : 0.86;
-    } else if (model.includes('biogpt')) {
+    } else if (model.includes('meditron')) {
       return complexity > 70 ? 0.65 : 0.78;
     } else {
       return complexity > 70 ? 0.70 : 0.80;

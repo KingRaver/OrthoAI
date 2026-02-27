@@ -17,7 +17,7 @@ function clearConfigEnv(): void {
   delete process.env.LLM_API_KEY;
   delete process.env.MODEL_ENDPOINTS;
   delete process.env.LLM_BASE_URL_BIOMISTRAL_7B_INSTRUCT;
-  delete process.env.LLM_BASE_URL_BIOGPT;
+  delete process.env.LLM_BASE_URL_MEDITRON_7B;
   delete process.env.EMBEDDING_BASE_URL;
   delete process.env.EMBEDDING_MODEL;
   delete process.env.LLM_REQUEST_TIMEOUT_MS;
@@ -51,14 +51,14 @@ describe('llm/config', () => {
     process.env.LLM_BASE_URL = 'http://default:8080/v1';
     process.env.MODEL_ENDPOINTS = JSON.stringify({
       'biomistral-7b-instruct': 'http://json:8080/v1',
-      biogpt: 'http://json:8081/v1',
+      'meditron-7b': 'http://json:8081/v1',
     });
     process.env.LLM_BASE_URL_BIOMISTRAL_7B_INSTRUCT = 'http://env:8080/v1';
 
     expect(getLlmChatUrlForModel('biomistral-7b-instruct')).toBe(
       'http://env:8080/v1/chat/completions'
     );
-    expect(getLlmChatUrlForModel('biogpt')).toBe('http://json:8081/v1/chat/completions');
+    expect(getLlmChatUrlForModel('meditron-7b')).toBe('http://json:8081/v1/chat/completions');
     expect(getLlmChatUrlForModel('unknown-model')).toBe(
       'http://default:8080/v1/chat/completions'
     );
@@ -69,7 +69,7 @@ describe('llm/config', () => {
     process.env.MODEL_ENDPOINTS = '{broken json';
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
-    expect(getLlmChatUrlForModel('biogpt')).toBe('http://fallback:8080/v1/chat/completions');
+    expect(getLlmChatUrlForModel('meditron-7b')).toBe('http://fallback:8080/v1/chat/completions');
     expect(warnSpy).toHaveBeenCalledOnce();
   });
 

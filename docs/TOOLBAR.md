@@ -127,7 +127,7 @@ Conversation summaries are designed for hierarchical memory:
 
 ## Planned Enhancements
 
-The following features are planned for the memory system (see `CONTEXT.md` for full implementation plan):
+The following features are planned for the memory system and tracked in internal build documentation:
 
 ### 1. Hybrid Retrieval (RAG_HYBRID)
 - Combines dense (semantic) and lexical (BM25/FTS) search

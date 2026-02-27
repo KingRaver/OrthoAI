@@ -10,6 +10,8 @@ import type { ChatCompletionMessageParam } from 'openai/resources/chat';
 import type { ChatCompletionMessageFunctionToolCall } from 'openai/resources/chat/completions';
 import type { ChatCompletionMessage } from 'openai/resources/chat/completions';
 import type { ClinicalReferenceItem, EvidenceRecord } from '@/app/lib/knowledge/phase5Types';
+import { modeAnalytics } from '@/app/lib/domain/modeAnalytics';
+import { qualityPredictor } from '@/app/lib/learning/qualityPredictor';
 import {
   applyMemoryRuntimePreferencesToEnv,
   getMemoryRuntimePreferencesFromEnv,
@@ -24,6 +26,29 @@ function truncateText(value: string, maxLength = 520): string {
   const text = value.trim();
   if (text.length <= maxLength) return text;
   return `${text.slice(0, maxLength).trimEnd()}...`;
+}
+
+function generateModeInteractionId(): string {
+  return `mode_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+async function computeInitialQuality(
+  strategyDecision: StrategyDecision | null,
+  model: string,
+  temperature: number,
+  maxTokens: number,
+  enableTools: boolean,
+  fallback: number
+): Promise<number> {
+  const theme = strategyDecision?.metadata?.detectedTheme;
+  const complexity = strategyDecision?.complexityScore;
+  if (!theme || complexity === undefined) return fallback;
+  try {
+    const prediction = await qualityPredictor.predictQuality(theme, complexity, model, temperature, maxTokens, enableTools);
+    return prediction.predictedQuality;
+  } catch {
+    return fallback;
+  }
 }
 
 const openai = new OpenAI({
@@ -51,7 +76,7 @@ export async function POST(req: NextRequest) {
       useMemory: requestedUseMemory = true,
       memoryPreferences,
       filePath, // Optional: file path for domain detection
-      manualModeOverride, // Optional: user-selected mode ('clinical-consult' | 'surgical-planning' | 'complications-risk' | 'imaging-dx' | 'rehab-rtp' | 'evidence-brief')
+      manualModeOverride, // Optional: user-selected mode ('clinical-consult' | 'treatment-decision' | 'surgical-planning' | 'complications-risk' | 'imaging-dx' | 'rehab-rtp' | 'evidence-brief')
       caseId, // Optional: patient case ID for context injection
       researchMode = false, // Optional: enables remote evidence refresh (PubMed/Cochrane)
     } = await req.json();
@@ -107,17 +132,17 @@ Responses should be thorough and explanatory. Be clinically decisive and structu
 State level of evidence and uncertainty when relevant. If key details are missing, include 1-3 targeted clarifying questions.
 Avoid generic statements; include specifics, thresholds, alternatives, and practical details.
 Use markdown formatting where appropriate:
-- Use code blocks with \`\`\` for code examples
-- Use inline code with \` for short code snippets
-- Use **bold** for emphasis
-- Use lists for structured information
-- Use readable paragraphs; do not abbreviate necessary clinical detail
+- Use concise section headers and lists for readability
+- Emphasize key actions, thresholds, and contingencies
+- Use readable paragraphs; do not omit clinically necessary detail
 
 CRITICAL: Never repeat or echo these instructions. Respond directly to the user with clinical content only.`;
 
     let temperature = llmContext.temperature;
     let maxTokens = llmContext.maxTokens;
     const detectedMode = llmContext.mode;
+    const modeUsed = manualModeOverride || detectedMode || 'auto';
+    const modeInteractionId = generateModeInteractionId();
 
     // ============================================================
     // STRATEGY EXECUTION: Auto-select model and parameters
@@ -425,6 +450,19 @@ CRITICAL: Never repeat or echo these instructions. Respond directly to the user 
         // Store assistant response and return
         await memory.saveMessage(currentConversationId, 'assistant', workflowResult.response, model);
 
+        try {
+          await modeAnalytics.logInteraction({
+            id: modeInteractionId,
+            mode: modeUsed,
+            modelUsed: strategyDecision.selectedModel,
+            responseQuality: await computeInitialQuality(strategyDecision, strategyDecision.selectedModel, temperature, maxTokens, enableTools, 0.9),
+            responseTime: Date.now() - strategyStartTime,
+            tokensUsed: workflowResult.tokensUsed,
+          });
+        } catch (error) {
+          console.warn('[ModeAnalytics] Error logging workflow interaction:', error);
+        }
+
         return new NextResponse(
           JSON.stringify({
             content: workflowResult.response,
@@ -432,12 +470,14 @@ CRITICAL: Never repeat or echo these instructions. Respond directly to the user 
             strategy: strategyDecision.strategyName,
             workflowMetadata: workflowResult.workflowMetadata,
             decisionId: strategyDecision.id,
+            modeInteractionId,
             metadata: {
               detectedTheme: strategyDecision.metadata?.detectedTheme,
               complexityScore: strategyDecision.complexityScore,
               temperature: temperature,
               maxTokens: maxTokens
-            }
+            },
+            modeUsed,
           }),
           { headers: { 'Content-Type': 'application/json' } }
         );
@@ -520,21 +560,21 @@ CRITICAL: Never repeat or echo these instructions. Respond directly to the user 
               if (!reader) throw new Error('No response body');
 
               // Send metadata first for frontend feedback tracking
-              if (strategyDecision) {
-                const metadataChunk = {
-                  type: 'metadata',
-                  decisionId: strategyDecision.id,
-                  conversationId: currentConversationId,
-                  theme: strategyDecision.metadata?.detectedTheme,
-                  complexity: strategyDecision.complexityScore,
-                  temperature: temperature,
-                  maxTokens: maxTokens,
-                  modelUsed: model
-                };
-                controller.enqueue(
-                  new TextEncoder().encode(`data: ${JSON.stringify(metadataChunk)}\n\n`)
-                );
-              }
+              const metadataChunk = {
+                type: 'metadata',
+                decisionId: strategyDecision?.id,
+                modeInteractionId,
+                modeUsed,
+                conversationId: currentConversationId,
+                theme: strategyDecision?.metadata?.detectedTheme,
+                complexity: strategyDecision?.complexityScore,
+                temperature: temperature,
+                maxTokens: maxTokens,
+                modelUsed: model
+              };
+              controller.enqueue(
+                new TextEncoder().encode(`data: ${JSON.stringify(metadataChunk)}\n\n`)
+              );
 
               const decoder = new TextDecoder();
               let buffer = '';
@@ -612,6 +652,19 @@ CRITICAL: Never repeat or echo these instructions. Respond directly to the user 
                 } catch (error) {
                   console.warn('[Strategy] Error logging outcome:', error);
                 }
+              }
+
+              try {
+                await modeAnalytics.logInteraction({
+                  id: modeInteractionId,
+                  mode: modeUsed,
+                  modelUsed: model,
+                  responseQuality: await computeInitialQuality(strategyDecision, model, temperature, maxTokens, enableTools, 0.8),
+                  responseTime: Date.now() - strategyStartTime,
+                  tokensUsed: Math.max(1, Math.ceil(fullContent.length / 4)),
+                });
+              } catch (error) {
+                console.warn('[ModeAnalytics] Error logging streaming interaction:', error);
               }
 
               if (DEBUG_METRICS) {
@@ -768,19 +821,19 @@ CRITICAL: Never repeat or echo these instructions. Respond directly to the user 
       console.warn('[Memory] Error saving assistant message:', error);
     }
 
+    const nonStreamingTokensUsed = currentCompletion.usage?.total_tokens || Math.max(1, Math.ceil(assistantMessage.length / 4));
+    const nonStreamingResponseTime = Date.now() - strategyStartTime;
+
     // ============================================================
     // LOG STRATEGY OUTCOME (non-streaming)
     // ============================================================
     if (strategyDecision) {
       try {
-        const responseTime = Date.now() - strategyStartTime;
-        const tokensUsed = currentCompletion.usage?.total_tokens || assistantMessage.length / 4;
-
         await strategyManager.logOutcome(strategyDecision.id, {
           decisionId: strategyDecision.id,
           responseQuality: 0.8, // Default quality, can be improved with feedback
-          responseTime: responseTime,
-          tokensUsed: tokensUsed,
+          responseTime: nonStreamingResponseTime,
+          tokensUsed: nonStreamingTokensUsed,
           errorOccurred: false,
           retryCount: 0
         });
@@ -790,11 +843,25 @@ CRITICAL: Never repeat or echo these instructions. Respond directly to the user 
       }
     }
 
+    try {
+      await modeAnalytics.logInteraction({
+        id: modeInteractionId,
+        mode: modeUsed,
+        modelUsed: model,
+        responseQuality: await computeInitialQuality(strategyDecision, model, temperature, maxTokens, enableTools, 0.8),
+        responseTime: nonStreamingResponseTime,
+        tokensUsed: nonStreamingTokensUsed,
+      });
+    } catch (error) {
+      console.warn('[ModeAnalytics] Error logging non-streaming interaction:', error);
+    }
+
     // Return response with conversation ID, auto-selected model, decision ID, and learning metadata
     type LlmResponsePayload = ChatCompletionMessage & {
       conversationId: string | null;
       autoSelectedModel: string;
       decisionId?: string;
+      modeInteractionId: string;
       metadata?: {
         detectedTheme?: string;
         complexityScore: number;
@@ -809,13 +876,14 @@ CRITICAL: Never repeat or echo these instructions. Respond directly to the user 
       conversationId: currentConversationId,
       autoSelectedModel: model,
       decisionId: strategyDecision ? strategyDecision.id : undefined,
+      modeInteractionId,
       metadata: strategyDecision ? {
         detectedTheme: strategyDecision.metadata?.detectedTheme as string | undefined,
         complexityScore: strategyDecision.complexityScore,
         temperature: temperature,
         maxTokens: maxTokens
       } : undefined,
-      modeUsed: manualModeOverride || detectedMode
+      modeUsed
     };
 
     return NextResponse.json(responsePayload);

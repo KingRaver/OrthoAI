@@ -13,7 +13,7 @@ import {
 
 /**
  * Adaptive Strategy (ML-Driven)
- * Uses historical analytics + user feedback to pick BioMistral vs BioGPT
+ * Uses historical analytics + user feedback to pick BioMistral vs Meditron
  */
 
 export class AdaptiveStrategy extends BaseStrategy {
@@ -34,7 +34,7 @@ export class AdaptiveStrategy extends BaseStrategy {
       const [strategyPerf, modelPerfPrimary, modelPerfFast] = await Promise.all([
         this.analytics.getStrategyPerformance('balanced'),
         this.analytics.getModelPerformance('biomistral-7b-instruct'),
-        this.analytics.getModelPerformance('biogpt')
+        this.analytics.getModelPerformance('meditron-7b')
       ]);
 
       const parameterRec = await parameterTuner.getRecommendation(
@@ -116,7 +116,7 @@ export class AdaptiveStrategy extends BaseStrategy {
 
     if (themeDetection && themeDetection.confidence > 0.7) {
       const themeBoost = 0.15 * themeDetection.confidence;
-      if (themeDetection.suggestedModel.includes('biogpt')) {
+      if (themeDetection.suggestedModel.includes('meditron')) {
         scoreFast += themeBoost;
       } else {
         scorePrimary += themeBoost;
@@ -126,13 +126,13 @@ export class AdaptiveStrategy extends BaseStrategy {
     let model, alternative, confidence, reasoning, temperature;
 
     if (isConstrained || scoreFast > scorePrimary * 0.95) {
-      model = 'biogpt';
+      model = 'meditron-7b';
       alternative = 'biomistral-7b-instruct';
       confidence = scoreFast;
-      reasoning = `BioGPT favored (fast: ${scoreFast.toFixed(2)} vs BioMistral: ${scorePrimary.toFixed(2)})`;
+      reasoning = `Meditron favored (fast: ${scoreFast.toFixed(2)} vs BioMistral: ${scorePrimary.toFixed(2)})`;
     } else {
       model = 'biomistral-7b-instruct';
-      alternative = 'biogpt';
+      alternative = 'meditron-7b';
       confidence = scorePrimary;
       reasoning = `BioMistral favored for complexity ${complexity} (score ${scorePrimary.toFixed(2)})`;
     }

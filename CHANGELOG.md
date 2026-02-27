@@ -101,3 +101,98 @@
 - `scripts/memory-retrieval-benchmark.mjs` - Added dense vs hybrid vs chunked benchmark gate
 - `docs/audits/MEMORY_RELEASE_CHECKLIST.md` - Added Track E release and rollback checklist
 - `app/lib/memory/README.md` - Added Track E defaults + benchmark/checklist references
+
+---
+
+## [Unreleased] - 2026-02-27
+
+### Added
+- **Mode analytics regression coverage**
+  - Added `domain.mode-analytics` test suite to validate:
+    - mode interaction row insertion
+    - feedback updates applied to existing mode interaction records
+    - `treatment-decision` included in aggregate mode reporting
+
+### Changed
+- **Mode analytics is now wired end-to-end in chat flow**
+  - Added mode interaction logging on all LLM response paths:
+    - workflow path
+    - non-streaming single-model path
+    - streaming path
+  - Introduced `modeInteractionId` propagation from backend to frontend and feedback API
+  - Feedback updates now target mode rows via `modeInteractionId` with legacy fallback handling
+- **Secondary model standardized to `meditron-7b`**
+  - Replaced prior `biogpt` references across strategy/learning model selection, endpoint examples, and tests
+  - Updated workflow labels and model metadata to match current startup/runtime docs
+- **Documentation alignment and cleanup**
+  - Internal build docs moved under `docs/build/` and kept private via explicit `.gitignore` rule
+  - Removed stale references to moved/private build docs from public repo documentation
+  - Reworked `docs/build/BUILD_DECISIONS.md` checklist into a sequential step plan
+
+### Validation
+- `npm run test:run` passes (`83` tests).
+
+### Files Modified
+- `app/api/llm/route.ts`
+- `app/api/feedback/route.ts`
+- `components/Chat.tsx`
+- `components/LearningDashboard.tsx`
+- `app/lib/domain/modeAnalytics.ts`
+- `app/lib/strategy/implementations/workflowStrategy.ts`
+- `app/lib/strategy/implementations/adaptiveStrategy.ts`
+- `app/lib/strategy/implementations/complexityStrategy.ts`
+- `app/lib/strategy/baseStrategy.ts`
+- `app/lib/strategy/context.ts`
+- `app/lib/strategy/resources/constraints.ts`
+- `app/lib/learning/patternRecognition.ts`
+- `app/lib/learning/qualityPredictor.ts`
+- `app/lib/learning/README.md`
+- `app/lib/llm/config.ts`
+- `__tests__/domain.mode-analytics.test.ts`
+- `__tests__/strategy.orchestrator.test.ts`
+- `__tests__/llm.config.test.ts`
+- `docs/TOOLBAR.md`
+- `docs/audits/COMPLIANCE_AUDIT.md`
+- `docs/build/BUILD_DECISIONS.md`
+- `.gitignore`
+
+---
+
+## [Unreleased] - 2026-02-27
+
+### Added
+- **Quality lifecycle integration tests** (`__tests__/domain.mode-analytics.integration.test.ts`)
+  - Positive feedback overrides predicted quality score to 0.95
+  - Neutral feedback overrides to 0.7
+  - Multi-interaction aggregation validates mixed feedback + no-feedback rows
+  - `getAllModesPerformance` returns all 8 canonical orthopedic modes
+
+### Changed
+- **Initial `responseQuality` now uses learned quality predictor**
+  - All three `modeAnalytics.logInteraction()` call sites in `app/api/llm/route.ts` replaced
+    hardcoded presets (0.9 / 0.8) with `await computeInitialQuality(...)`, a helper that calls
+    `qualityPredictor.predictQuality(theme, complexity, model, temperature, maxTokens, enableTools)`
+  - Falls back to static preset (0.9 workflow / 0.8 streaming / 0.8 non-streaming) when
+    `theme` or `complexity` are unavailable (no strategy decision, early-path requests)
+  - Quality values in mode analytics now reflect accumulated model history instead of
+    synthetic baselines before any feedback arrives
+- **Feedback route now warns on missing `mode` field**
+  - `app/api/feedback/route.ts` logs `console.warn` when `resolvedModeInteractionId` is
+    present but `mode` is absent, surfacing previously silent mode analytics skips
+- **STARTUP.md documents Vercel `maxDuration` incompatibility**
+  - Added callout noting `maxDuration = 3600` is local-dev only; Vercel caps at 300 s,
+    which would silently truncate long chain/ensemble workflows
+- **BUILD_DECISIONS §6 Cochrane source clarified**
+  - Changed "Cochrane (via API search client)" to explicitly state the implementation is a
+    PubMed journal filter for `"Cochrane Database Syst Rev"`, not the CENTRAL API, and is
+    limited to PubMed-indexed abstracts
+
+### Validation
+- `npm run test:run` passes (`87` tests, 17 test files, 0 failures).
+
+### Files Modified
+- `app/api/llm/route.ts` — added `computeInitialQuality` helper; updated 3 `logInteraction` call sites
+- `app/api/feedback/route.ts` — added missing-mode warning log
+- `__tests__/domain.mode-analytics.integration.test.ts` — new file (4 tests)
+- `docs/STARTUP.md` — Vercel maxDuration note
+- `docs/build/BUILD_DECISIONS.md` — §6 Cochrane source clarification

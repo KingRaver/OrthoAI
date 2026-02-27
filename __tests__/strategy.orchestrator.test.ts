@@ -39,7 +39,7 @@ describe('strategy orchestrator', () => {
       confidence: 0.81,
       votes: [
         { model: 'biomistral-7b-instruct', response: 'r1', tokensUsed: 110 },
-        { model: 'biogpt', response: 'r2', tokensUsed: 90 },
+        { model: 'meditron-7b', response: 'r2', tokensUsed: 90 },
       ],
       voteBreakdown: {
         selectedModel: 'biomistral-7b-instruct',
@@ -71,7 +71,7 @@ describe('strategy orchestrator', () => {
       ...baseDecision(),
       ensembleConfig: {
         enabled: true,
-        models: ['biomistral-7b-instruct', 'biogpt'],
+        models: ['biomistral-7b-instruct', 'meditron-7b'],
         votingStrategy: 'weighted',
       },
       modelChain: {
@@ -129,9 +129,9 @@ describe('strategy orchestrator', () => {
     vi.spyOn(EnsembleWorkflow, 'executeEnsemble').mockResolvedValue({
       response: 'ensemble-only',
       confidence: 0.8,
-      votes: [{ model: 'biogpt', response: 'x', tokensUsed: 77 }],
+      votes: [{ model: 'meditron-7b', response: 'x', tokensUsed: 77 }],
       voteBreakdown: {
-        selectedModel: 'biogpt',
+        selectedModel: 'meditron-7b',
         strategy: 'majority',
         modelAgreement: 1,
         lowConsensus: false,
@@ -144,7 +144,7 @@ describe('strategy orchestrator', () => {
       ...baseDecision(),
       ensembleConfig: {
         enabled: true,
-        models: ['biogpt'],
+        models: ['meditron-7b'],
         votingStrategy: 'majority',
       },
     };
@@ -176,7 +176,7 @@ describe('strategy orchestrator', () => {
     });
     expect(unchanged).toBe(decision);
 
-    expect(ResourceConstraints.downgradeForRAM(5000)).toBe('biogpt');
+    expect(ResourceConstraints.downgradeForRAM(5000)).toBe('meditron-7b');
     expect(ResourceConstraints.downgradeForRAM(12000)).toBe('biomistral-7b-instruct');
 
     const wrapped = await withResourceConstraints(async () => decision, {

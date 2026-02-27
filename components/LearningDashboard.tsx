@@ -351,7 +351,7 @@ export default function LearningDashboard() {
           <div className="space-y-4">
             <h3 className="text-lg font-bold text-slate-900 mb-4">Interaction Mode Performance</h3>
             <p className="text-sm text-slate-600 mb-4">
-              Track how well each mode (Auto, Clinical Consult, Surgical Planning, Complications/Risk, Imaging Dx, Rehab/RTP, Evidence Brief) performs based on your feedback.
+              Track how well each mode (Auto, Clinical Consult, Treatment Decision, Surgical Planning, Complications/Risk, Imaging Dx, Rehab/RTP, Evidence Brief) performs based on your feedback.
             </p>
             {data.modes && data.modes.length > 0 ? (
               <div className="grid gap-3">
@@ -359,6 +359,7 @@ export default function LearningDashboard() {
                   const modeNames: Record<string, string> = {
                     'auto': '🤖 Auto Mode',
                     'clinical-consult': '🩺 Clinical Consult',
+                    'treatment-decision': '🎯 Treatment Decision',
                     'surgical-planning': '🧰 Surgical Planning',
                     'complications-risk': '⚠️ Complications & Risk',
                     'imaging-dx': '🧠 Imaging Dx',
@@ -453,7 +454,7 @@ export default function LearningDashboard() {
               </div>
             ) : (
               <div className="text-center text-slate-400 py-8">
-                No mode data yet. Start using Auto, Synthesis, Mechanistic, Hypothesis, or Study Design modes to see performance metrics!
+                No mode data yet. Start using Auto or any OrthoAI clinical mode to see performance metrics.
               </div>
             )}
           </div>

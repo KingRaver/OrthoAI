@@ -56,7 +56,7 @@ export abstract class BaseStrategy {
     availableModels: string[]
   ): string {
     const modelMap: Record<string, string> = {
-      '3B': 'biogpt',
+      '3B': 'meditron-7b',
       '7B': 'biomistral-7b-instruct',
       '16B': 'biomistral-7b-instruct'
     };

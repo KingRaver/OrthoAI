@@ -5,7 +5,7 @@ import fs from 'fs';
 
 /**
  * Mode Analytics
- * Tracks performance of interaction modes (clinical-consult, surgical-planning, complications-risk, imaging-dx, rehab-rtp, evidence-brief, auto)
+ * Tracks performance of interaction modes (clinical-consult, treatment-decision, surgical-planning, complications-risk, imaging-dx, rehab-rtp, evidence-brief, auto)
  * Separate from strategy analytics - these track the personality/system prompt performance
  *
  * KEY DESIGN:
@@ -179,6 +179,7 @@ export class ModeAnalytics {
     const modes = [
       'auto',
       'clinical-consult',
+      'treatment-decision',
       'surgical-planning',
       'complications-risk',
       'imaging-dx',
