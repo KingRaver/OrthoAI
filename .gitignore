@@ -75,6 +75,7 @@ chroma/
 
 # Local docs
 docs/STARTUP.md
+docs/legacy/
 
 # IDEs and editors
 .idea/
