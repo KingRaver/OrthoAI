@@ -50,7 +50,38 @@ function mockRag(manager: MemoryManager): void {
   vi.spyOn(rag, 'deleteUserProfileEmbedding').mockResolvedValue(undefined);
 }
 
-describe('Track C summary/profile reliability', () => {
+const sqliteBindingAvailable = await (async () => {
+  const probePath = path.join(
+    os.tmpdir(),
+    `orthoai-track-c-probe-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.db`
+  );
+
+  try {
+    const sqlite = await import('better-sqlite3');
+    const Database = sqlite.default as unknown as new (filePath: string) => {
+      exec: (sql: string) => unknown;
+      close: () => void;
+    };
+
+    const db = new Database(probePath);
+    db.exec('SELECT 1');
+    db.close();
+    removeDbArtifacts(probePath);
+    return true;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(
+      '[Track C tests] Skipping suite because better-sqlite3 native binding is unavailable:',
+      message
+    );
+    removeDbArtifacts(probePath);
+    return false;
+  }
+})();
+
+const describeTrackC = sqliteBindingAvailable ? describe : describe.skip;
+
+describeTrackC('Track C summary/profile reliability', () => {
   let dbPath = '';
 
   beforeEach(async () => {
