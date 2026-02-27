@@ -58,13 +58,25 @@ interface AnalyticsData {
   quality?: QualityAnalytics[];
   strategies?: StrategyAnalytics[];
   modes?: ModeAnalytics[];
+  performance?: {
+    windowHours: number;
+    llmLatencyMs: { p50: number; p90: number; p95: number; p99: number };
+    retrievalLatencyMs: { p50: number; p90: number; p95: number; p99: number };
+    throughputPerHour: Array<{ hour: string; requests: number; messages: number }>;
+    process: {
+      rssMb: number;
+      heapUsedMb: number;
+      loadAvg1m: number;
+      uptimeSec: number;
+    };
+  };
 }
 
 export default function LearningDashboard() {
   const [data, setData] = useState<AnalyticsData>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  type TabId = 'themes' | 'parameters' | 'quality' | 'strategies' | 'modes';
+  type TabId = 'themes' | 'parameters' | 'quality' | 'strategies' | 'modes' | 'performance';
   const [activeTab, setActiveTab] = useState<TabId>('themes');
 
   useEffect(() => {
@@ -121,7 +133,8 @@ export default function LearningDashboard() {
           { id: 'parameters', label: 'Parameter Tuning', count: data.parameters?.length || 0 },
           { id: 'quality', label: 'Quality Prediction', count: data.quality?.length || 0 },
           { id: 'strategies', label: 'Strategy Performance', count: data.strategies?.length || 0 },
-          { id: 'modes', label: 'Mode Performance', count: data.modes?.length || 0 }
+          { id: 'modes', label: 'Mode Performance', count: data.modes?.length || 0 },
+          { id: 'performance', label: 'System Performance', count: data.performance ? 1 : 0 }
         ] as Array<{ id: TabId; label: string; count: number }>).map(tab => (
           <button
             key={tab.id}
@@ -455,6 +468,53 @@ export default function LearningDashboard() {
             ) : (
               <div className="text-center text-slate-400 py-8">
                 No mode data yet. Start using Auto or any OrthoAI clinical mode to see performance metrics.
+              </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'performance' && (
+          <div className="space-y-4">
+            <h3 className="text-lg font-bold text-slate-900 mb-4">Latency Percentiles & Throughput</h3>
+            {data.performance ? (
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="p-4 bg-slate-50 rounded-lg border border-slate-200">
+                    <div className="text-xs text-slate-500 mb-2">LLM Latency (ms)</div>
+                    <div className="text-sm text-slate-700">P50 {data.performance.llmLatencyMs.p50} • P95 {data.performance.llmLatencyMs.p95} • P99 {data.performance.llmLatencyMs.p99}</div>
+                  </div>
+                  <div className="p-4 bg-slate-50 rounded-lg border border-slate-200">
+                    <div className="text-xs text-slate-500 mb-2">Retrieval Latency (ms)</div>
+                    <div className="text-sm text-slate-700">P50 {data.performance.retrievalLatencyMs.p50} • P95 {data.performance.retrievalLatencyMs.p95} • P99 {data.performance.retrievalLatencyMs.p99}</div>
+                  </div>
+                </div>
+
+                <div className="p-4 bg-slate-50 rounded-lg border border-slate-200">
+                  <div className="text-xs text-slate-500 mb-2">Process Health</div>
+                  <div className="text-sm text-slate-700">
+                    RSS {data.performance.process.rssMb}MB • Heap {data.performance.process.heapUsedMb}MB • Load {data.performance.process.loadAvg1m.toFixed(2)} • Uptime {Math.round(data.performance.process.uptimeSec / 60)} min
+                  </div>
+                </div>
+
+                <div className="p-4 bg-slate-50 rounded-lg border border-slate-200">
+                  <div className="text-xs text-slate-500 mb-2">Hourly Throughput</div>
+                  {data.performance.throughputPerHour.length === 0 ? (
+                    <div className="text-sm text-slate-500">No recent throughput data yet.</div>
+                  ) : (
+                    <div className="space-y-1 max-h-64 overflow-y-auto pr-1">
+                      {data.performance.throughputPerHour.slice(-24).map(row => (
+                        <div key={row.hour} className="flex items-center justify-between text-xs border-b border-slate-200 py-1">
+                          <span className="text-slate-600">{new Date(row.hour).toLocaleString()}</span>
+                          <span className="text-slate-800 font-semibold">{row.requests} req • {row.messages} msg</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="text-center text-slate-400 py-8">
+                No performance telemetry available.
               </div>
             )}
           </div>

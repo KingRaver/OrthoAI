@@ -37,6 +37,9 @@ export default function TopNav({
                 <Link href="/cases" className="hover:text-slate-700 transition-colors">
                   Cases
                 </Link>
+                <Link href="/clinical" className="hover:text-slate-700 transition-colors">
+                  Clinical
+                </Link>
                 <Link href="/knowledge" className="hover:text-slate-700 transition-colors">
                   Knowledge
                 </Link>

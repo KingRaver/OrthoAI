@@ -12,6 +12,44 @@ interface ConversationLink {
   created_at: string;
 }
 
+interface ImagingStudy {
+  id: string;
+  study_type: string;
+  modality: string | null;
+  body_part: string | null;
+  study_date: string | null;
+  description: string | null;
+}
+
+interface CaseDashboard {
+  overview: {
+    timelineDays: number;
+    totalEvents: number;
+    keyMetrics: Array<{ label: string; value: string | number }>;
+  };
+  treatmentProgress: Array<{
+    phase: string;
+    completed: boolean;
+    completedAt?: string;
+  }>;
+  alerts: Array<{
+    level: 'low' | 'moderate' | 'high' | 'critical';
+    message: string;
+  }>;
+}
+
+function toDisplayValue(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  return null;
+}
+
 export default function CaseDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -20,23 +58,51 @@ export default function CaseDetailPage() {
   const [patientCase, setPatientCase] = useState<PatientCase | null>(null);
   const [events, setEvents] = useState<CaseEvent[]>([]);
   const [links, setLinks] = useState<ConversationLink[]>([]);
+  const [dashboard, setDashboard] = useState<CaseDashboard | null>(null);
+  const [imagingStudies, setImagingStudies] = useState<ImagingStudy[]>([]);
   const [loading, setLoading] = useState(true);
   const [isEditing, setIsEditing] = useState(false);
   const [conversationId, setConversationId] = useState('');
   const [linkingConversation, setLinkingConversation] = useState(false);
+  const [newStudyType, setNewStudyType] = useState('');
+  const [newStudyModality, setNewStudyModality] = useState('');
+  const [newStudyBodyPart, setNewStudyBodyPart] = useState('');
+  const [addingStudy, setAddingStudy] = useState(false);
 
   const fetchCase = useCallback(async () => {
     setLoading(true);
     try {
-      const response = await fetch(`/api/cases/${caseId}`);
-      if (!response.ok) throw new Error('Failed to fetch case');
-      const data = await response.json();
-      setPatientCase(data.case || null);
-      setEvents(data.events || []);
-      setLinks(data.conversations || []);
+      const [caseResponse, dashboardResponse, imagingResponse] = await Promise.all([
+        fetch(`/api/cases/${caseId}`),
+        fetch(`/api/cases/${caseId}/dashboard`),
+        fetch(`/api/imaging?caseId=${caseId}&limit=100`),
+      ]);
+
+      if (!caseResponse.ok) throw new Error('Failed to fetch case');
+
+      const caseData = await caseResponse.json();
+      setPatientCase(caseData.case || null);
+      setEvents(caseData.events || []);
+      setLinks(caseData.conversations || []);
+
+      if (dashboardResponse.ok) {
+        const dashboardData = await dashboardResponse.json();
+        setDashboard(dashboardData.dashboard || null);
+      } else {
+        setDashboard(null);
+      }
+
+      if (imagingResponse.ok) {
+        const imagingData = await imagingResponse.json();
+        setImagingStudies(imagingData.studies || []);
+      } else {
+        setImagingStudies([]);
+      }
     } catch (error) {
       console.error('Error fetching case:', error);
       setPatientCase(null);
+      setDashboard(null);
+      setImagingStudies([]);
     } finally {
       setLoading(false);
     }
@@ -89,6 +155,36 @@ export default function CaseDetailPage() {
     window.open(`/api/cases/${caseId}/export`, '_blank');
   };
 
+  const addImagingStudy = async () => {
+    if (!newStudyType.trim()) return;
+    setAddingStudy(true);
+    try {
+      const response = await fetch('/api/imaging', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          case_id: caseId,
+          study_type: newStudyType.trim(),
+          modality: newStudyModality.trim() || null,
+          body_part: newStudyBodyPart.trim() || null,
+          study_date: new Date().toISOString(),
+        }),
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to add imaging study');
+      }
+      setNewStudyType('');
+      setNewStudyModality('');
+      setNewStudyBodyPart('');
+      await fetchCase();
+    } catch (error) {
+      console.error('Error adding imaging study:', error);
+    } finally {
+      setAddingStudy(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-linear-to-br from-slate-50 via-cyan-50/30 to-slate-50">
@@ -123,6 +219,12 @@ export default function CaseDetailPage() {
       </div>
     );
   }
+
+  const demographics = patientCase.demographics as Record<string, unknown> | null;
+  const demographicAge = toDisplayValue(demographics?.age);
+  const demographicSex = toDisplayValue(demographics?.sex);
+  const demographicOccupation = toDisplayValue(demographics?.occupation);
+  const hasDemographics = Boolean(demographicAge || demographicSex || demographicOccupation);
 
   return (
     <div className="min-h-screen bg-linear-to-br from-slate-50 via-cyan-50/30 to-slate-50">
@@ -191,24 +293,24 @@ export default function CaseDetailPage() {
                 </div>
 
                 {/* Demographics */}
-                {patientCase.demographics && Object.keys(patientCase.demographics).length > 0 && (
+                {hasDemographics && (
                   <div className="mt-4 flex flex-wrap gap-3">
-                    {patientCase.demographics.age && (
+                    {demographicAge && (
                       <div className="px-3 py-1.5 rounded-lg bg-slate-100 text-sm">
                         <span className="text-slate-500">Age:</span>{' '}
-                        <span className="font-medium text-slate-700">{patientCase.demographics.age}</span>
+                        <span className="font-medium text-slate-700">{demographicAge}</span>
                       </div>
                     )}
-                    {patientCase.demographics.sex && (
+                    {demographicSex && (
                       <div className="px-3 py-1.5 rounded-lg bg-slate-100 text-sm">
                         <span className="text-slate-500">Sex:</span>{' '}
-                        <span className="font-medium text-slate-700">{patientCase.demographics.sex}</span>
+                        <span className="font-medium text-slate-700">{demographicSex}</span>
                       </div>
                     )}
-                    {patientCase.demographics.occupation && (
+                    {demographicOccupation && (
                       <div className="px-3 py-1.5 rounded-lg bg-slate-100 text-sm">
                         <span className="text-slate-500">Occupation:</span>{' '}
-                        <span className="font-medium text-slate-700">{patientCase.demographics.occupation}</span>
+                        <span className="font-medium text-slate-700">{demographicOccupation}</span>
                       </div>
                     )}
                   </div>
@@ -330,6 +432,113 @@ export default function CaseDetailPage() {
                 </div>
               </div>
 
+              {/* Clinical Dashboard */}
+              <div className="rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
+                <h3 className="text-sm font-bold text-slate-900 mb-4">Clinical Dashboard</h3>
+                {dashboard ? (
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div className="rounded-lg bg-slate-50 border border-slate-200 p-2">
+                        <p className="text-slate-500">Timeline</p>
+                        <p className="font-semibold text-slate-800">{dashboard.overview.timelineDays} days</p>
+                      </div>
+                      <div className="rounded-lg bg-slate-50 border border-slate-200 p-2">
+                        <p className="text-slate-500">Events</p>
+                        <p className="font-semibold text-slate-800">{dashboard.overview.totalEvents}</p>
+                      </div>
+                    </div>
+
+                    <div>
+                      <p className="text-xs font-semibold text-slate-700 mb-1">Treatment Progress</p>
+                      <div className="space-y-1">
+                        {dashboard.treatmentProgress.map(item => (
+                          <div key={item.phase} className="flex items-center justify-between text-xs rounded-md border border-slate-200 px-2 py-1">
+                            <span className="text-slate-700">{item.phase}</span>
+                            <span className={item.completed ? 'text-green-700 font-semibold' : 'text-slate-400'}>
+                              {item.completed ? 'Done' : 'Pending'}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div>
+                      <p className="text-xs font-semibold text-slate-700 mb-1">Alerts</p>
+                      {dashboard.alerts.length === 0 ? (
+                        <p className="text-xs text-slate-500">No active alerts.</p>
+                      ) : (
+                        <div className="space-y-1">
+                          {dashboard.alerts.map((alert, idx) => (
+                            <div key={`${alert.message}-${idx}`} className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800">
+                              {alert.message}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-sm text-slate-500">Dashboard data unavailable.</p>
+                )}
+              </div>
+
+              {/* Imaging Studies */}
+              <div className="rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
+                <h3 className="text-sm font-bold text-slate-900 mb-4">Imaging Studies</h3>
+                {imagingStudies.length === 0 ? (
+                  <p className="text-sm text-slate-500 mb-4">No imaging studies linked to this case yet.</p>
+                ) : (
+                  <div className="space-y-2 mb-4 max-h-56 overflow-y-auto pr-1">
+                    {imagingStudies.map(study => (
+                      <div key={study.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                        <p className="text-xs font-semibold text-slate-800">
+                          {study.study_type} {study.modality ? `• ${study.modality}` : ''}
+                        </p>
+                        <p className="text-xs text-slate-500">
+                          {study.body_part || 'Body part n/a'} {study.study_date ? `• ${new Date(study.study_date).toLocaleDateString()}` : ''}
+                        </p>
+                        {study.description && (
+                          <p className="text-xs text-slate-600 mt-1">{study.description}</p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div className="space-y-2">
+                  <input
+                    type="text"
+                    value={newStudyType}
+                    onChange={(e) => setNewStudyType(e.target.value)}
+                    placeholder="Study type (e.g., MRI knee)"
+                    className="w-full px-3 py-2 rounded-xl text-xs font-medium bg-white text-slate-900 border-2 border-slate-900/40 hover:border-slate-900/70 focus:outline-none focus:ring-2 focus:ring-teal/60"
+                  />
+                  <div className="grid grid-cols-2 gap-2">
+                    <input
+                      type="text"
+                      value={newStudyModality}
+                      onChange={(e) => setNewStudyModality(e.target.value)}
+                      placeholder="Modality"
+                      className="px-3 py-2 rounded-xl text-xs font-medium bg-white text-slate-900 border-2 border-slate-900/40 hover:border-slate-900/70 focus:outline-none focus:ring-2 focus:ring-teal/60"
+                    />
+                    <input
+                      type="text"
+                      value={newStudyBodyPart}
+                      onChange={(e) => setNewStudyBodyPart(e.target.value)}
+                      placeholder="Body part"
+                      className="px-3 py-2 rounded-xl text-xs font-medium bg-white text-slate-900 border-2 border-slate-900/40 hover:border-slate-900/70 focus:outline-none focus:ring-2 focus:ring-teal/60"
+                    />
+                  </div>
+                  <button
+                    onClick={addImagingStudy}
+                    disabled={addingStudy || !newStudyType.trim()}
+                    className="w-full px-4 py-2 rounded-xl text-xs font-bold bg-linear-to-r from-teal/80 to-cyan-light/80 text-slate-900 border-2 border-slate-900/50 hover:border-slate-900/80 transition-all disabled:opacity-40"
+                  >
+                    {addingStudy ? 'Adding...' : 'Add Imaging Study'}
+                  </button>
+                </div>
+              </div>
+
               {/* Quick Actions */}
               <div className="rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
                 <h3 className="text-sm font-bold text-slate-900 mb-4">Quick Actions</h3>
@@ -360,6 +569,20 @@ export default function CaseDetailPage() {
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                     </svg>
                   </button>
+                  <Link
+                    href={`/api/cases/${caseId}/decision-support`}
+                    target="_blank"
+                    className="flex items-center gap-3 w-full p-3 rounded-xl bg-teal/10 border border-teal/30 hover:bg-teal/20 transition-all group"
+                  >
+                    <span className="text-xl">🧭</span>
+                    <div className="flex-1 text-left">
+                      <p className="text-sm font-medium text-slate-900">Case Decision Support</p>
+                      <p className="text-xs text-slate-500">Flowchart, differential, workup, and risk bundle</p>
+                    </div>
+                    <svg className="w-4 h-4 text-slate-400 group-hover:translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                    </svg>
+                  </Link>
                 </div>
               </div>
             </div>

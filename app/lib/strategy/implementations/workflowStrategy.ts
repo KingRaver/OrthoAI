@@ -6,6 +6,7 @@ import { parameterTuner } from '@/app/lib/learning/parameterTuner';
 import { StrategyDecision, StrategyContext } from '../types';
 import type { ThemeDetectionResult } from '@/app/lib/learning/patternRecognition';
 import type { TuningRecommendation } from '@/app/lib/learning/parameterTuner';
+import { getSubspecialtyManager } from '@/app/lib/clinical/subspecialty';
 
 /**
  * Workflow Strategy (Multi-Model Orchestration)
@@ -33,7 +34,7 @@ export class WorkflowStrategy extends BaseStrategy {
     try {
       // Only use simple path for truly trivial queries (greetings, etc.)
       // Clinical queries should always go through full workflow
-      if (complexity < 15) {
+      if (complexity < 30) {
         return this.buildSimpleDecision(complexity, mode);
       }
 
@@ -92,9 +93,11 @@ export class WorkflowStrategy extends BaseStrategy {
     parameterRec: TuningRecommendation | null
   ): StrategyDecision {
     const ensembleModels = ['biomistral-7b-instruct', 'meditron-7b'];
+    const subspecialty = this.resolveSubspecialty(mode, themeDetection?.primaryTheme);
+    const weightConfig = getSubspecialtyManager().getWeights(subspecialty);
     const weights: Record<string, number> = {
-      'biomistral-7b-instruct': 0.7,
-      'meditron-7b': 0.3
+      'biomistral-7b-instruct': weightConfig.biomistral_weight,
+      'meditron-7b': weightConfig.meditron_weight
     };
 
     const criticalThemes = ['guideline', 'surgery', 'comparative'];
@@ -156,9 +159,21 @@ export class WorkflowStrategy extends BaseStrategy {
         detectedTheme: themeDetection?.primaryTheme,
         themeConfidence: themeDetection?.confidence,
         parameterLearningConfidence: parameterRec?.confidence,
+        subspecialty,
         mode
       }
     };
+  }
+
+  private resolveSubspecialty(mode: string, theme?: string): string {
+    const normalizedMode = mode.toLowerCase();
+    const normalizedTheme = (theme || '').toLowerCase();
+    if (normalizedMode.includes('imaging') || normalizedTheme.includes('imaging')) return 'sports';
+    if (normalizedMode.includes('rehab')) return 'sports';
+    if (normalizedMode.includes('surgical') || normalizedTheme.includes('surgery')) return 'arthroplasty';
+    if (normalizedTheme.includes('spine')) return 'spine';
+    if (normalizedTheme.includes('fracture') || normalizedTheme.includes('trauma')) return 'trauma';
+    return 'general';
   }
 
   async updateFromFeedback(

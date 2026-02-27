@@ -3,10 +3,11 @@ import { getCaseManager } from '@/app/lib/cases';
 import { initializeStorage } from '@/app/lib/memory';
 
 interface Params {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }
 
-export async function POST(req: NextRequest, { params }: Params) {
+export async function POST(req: NextRequest, context: Params) {
+  const { id } = await context.params;
   await initializeStorage();
   const body = await req.json();
   if (!body?.conversationId) {
@@ -14,7 +15,7 @@ export async function POST(req: NextRequest, { params }: Params) {
   }
 
   const manager = getCaseManager();
-  const link = manager.linkConversation(params.id, body.conversationId);
+  const link = manager.linkConversation(id, body.conversationId);
 
   return NextResponse.json({ link }, { status: 201 });
 }

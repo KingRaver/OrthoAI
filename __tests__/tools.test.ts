@@ -4,6 +4,15 @@ import type { ChatCompletionMessageParam } from 'openai/resources/chat';
 import { executeTools } from '@/app/lib/tools/executor';
 import { getTools } from '@/app/lib/tools';
 
+function getFunctionToolNames(tools: ReturnType<typeof getTools>): string[] {
+  return tools
+    .filter(
+      (tool): tool is Extract<(typeof tools)[number], { type: 'function'; function: { name: string } }> =>
+        tool.type === 'function' && !!tool.function?.name
+    )
+    .map(tool => tool.function.name);
+}
+
 function makeToolCall(
   id: string,
   name: string,
@@ -33,14 +42,14 @@ describe('tools', () => {
     process.env.ENABLE_GENERIC_TOOLS = 'true';
     process.env.ENABLE_CODE_EXEC = 'false';
     const standardTools = getTools();
-    const names = standardTools.map(tool => tool.function?.name);
+    const names = getFunctionToolNames(standardTools);
 
     expect(names).toContain('get_weather');
     expect(names).toContain('calculator');
     expect(names).not.toContain('code_exec');
 
     process.env.ENABLE_CODE_EXEC = 'true';
-    const allTools = getTools().map(tool => tool.function?.name);
+    const allTools = getFunctionToolNames(getTools());
     expect(allTools).toContain('code_exec');
   });
 

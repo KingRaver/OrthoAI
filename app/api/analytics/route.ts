@@ -4,6 +4,7 @@ import { parameterTuner } from '@/app/lib/learning/parameterTuner';
 import { qualityPredictor } from '@/app/lib/learning/qualityPredictor';
 import { strategyManager } from '@/app/lib/strategy/manager';
 import { modeAnalytics } from '@/app/lib/domain/modeAnalytics';
+import { getPerformanceSnapshot } from '@/app/lib/system/performance';
 
 /**
  * Analytics API Endpoint
@@ -58,6 +59,11 @@ export async function GET(req: NextRequest) {
       // Get mode performance for each interaction mode
       const modesPerf = await modeAnalytics.getAllModesPerformance();
       data.modes = modesPerf.filter(m => m.totalInteractions > 0); // Only show modes with data
+    }
+
+    if (type === 'all' || type === 'performance') {
+      const performanceWindowHours = parseInt(searchParams.get('hours') || '24', 10);
+      data.performance = await getPerformanceSnapshot(performanceWindowHours);
     }
 
     return NextResponse.json({

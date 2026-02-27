@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from 'child_process';
 import path from 'path';
 import { setTimeout as delay } from 'timers/promises';
 import { JsonLineWorkerClient } from './jsonLineWorker';
+import { registerShutdownHandler } from '@/app/lib/system/shutdownRegistry';
 
 const DEBUG_VOICE_SERVER = process.env.DEBUG_VOICE_SERVER === 'true';
 
@@ -175,6 +176,21 @@ class SttService {
       this.whisperServerProcess.kill();
     }
     this.whisperServerProcess = null;
+  }
+
+  getStatus(): {
+    whisperServerRunning: boolean;
+    whisperServerPid: number | null;
+    cooldownUntil: string | null;
+  } {
+    const running = Boolean(this.whisperServerProcess && this.whisperServerProcess.exitCode === null);
+    return {
+      whisperServerRunning: running,
+      whisperServerPid: running ? (this.whisperServerProcess?.pid || null) : null,
+      cooldownUntil: this.whisperServerCooldownUntil > Date.now()
+        ? new Date(this.whisperServerCooldownUntil).toISOString()
+        : null,
+    };
   }
 
   private async transcribeViaWorker(audioBuffer: Buffer): Promise<TranscriptionResult> {
@@ -426,15 +442,38 @@ export function getSttService(): SttService {
 
   if (!globalStt.__orthoaiSttCleanupRegistered) {
     globalStt.__orthoaiSttCleanupRegistered = true;
-
-    const cleanup = () => {
+    registerShutdownHandler('stt-service', () => {
       globalStt.__orthoaiSttService?.dispose();
-    };
-
-    process.once('beforeExit', cleanup);
-    process.once('SIGINT', cleanup);
-    process.once('SIGTERM', cleanup);
+    });
   }
 
   return globalStt.__orthoaiSttService;
+}
+
+export function getSttServiceStatus(): {
+  initialized: boolean;
+  whisperServerRunning: boolean;
+  whisperServerPid: number | null;
+  cooldownUntil: string | null;
+} {
+  if (!globalStt.__orthoaiSttService) {
+    return {
+      initialized: false,
+      whisperServerRunning: false,
+      whisperServerPid: null,
+      cooldownUntil: null,
+    };
+  }
+
+  const status = globalStt.__orthoaiSttService.getStatus();
+  return {
+    initialized: true,
+    ...status,
+  };
+}
+
+export function disposeSttServiceIfInitialized(): void {
+  if (!globalStt.__orthoaiSttService) return;
+  globalStt.__orthoaiSttService.dispose();
+  globalStt.__orthoaiSttService = undefined;
 }

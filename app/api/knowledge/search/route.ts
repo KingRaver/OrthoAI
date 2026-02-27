@@ -14,6 +14,7 @@ export async function POST(req: NextRequest) {
     limit: body.limit,
     subspecialty: body.subspecialty,
     diagnosisTag: body.diagnosisTag,
+    condition: body.condition,
     documentId: body.documentId
   });
 

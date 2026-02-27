@@ -6,9 +6,15 @@
 
 export async function register() {
   if (process.env.NEXT_RUNTIME === 'nodejs') {
+    const { logger } = await import('./app/lib/system/logger');
+
     // Configure undici (used by Next.js fetch) with bounded timeouts
     const { setGlobalDispatcher, Agent } = await import('undici');
     const { getLlmRequestTimeoutMs } = await import('./app/lib/llm/config');
+    const { initializeMemory, getMemoryManager, closeStorage } = await import('./app/lib/memory');
+    const { installShutdownHandlers, registerShutdownHandler } = await import('./app/lib/system/shutdownRegistry');
+    const { disposeSttServiceIfInitialized } = await import('./app/lib/voice/server/sttService');
+    const { disposePiperServiceIfInitialized } = await import('./app/lib/voice/server/piperService');
     const requestTimeoutMs = getLlmRequestTimeoutMs();
 
     setGlobalDispatcher(
@@ -27,6 +33,27 @@ export async function register() {
       })
     );
 
-    console.log(`[Instrumentation] Undici configured with bounded timeouts (${requestTimeoutMs}ms)`);
+    installShutdownHandlers();
+    registerShutdownHandler('memory', async () => {
+      const memory = getMemoryManager();
+      await memory.waitForBackgroundIdle(5000);
+      closeStorage();
+    });
+    registerShutdownHandler('voice-stt', () => {
+      disposeSttServiceIfInitialized();
+    });
+    registerShutdownHandler('voice-piper', () => {
+      disposePiperServiceIfInitialized();
+    });
+
+    try {
+      await initializeMemory();
+      logger.info('Startup initialization complete', { requestTimeoutMs }, 'instrumentation');
+    } catch (error) {
+      logger.warn('Startup initialization degraded', {
+        requestTimeoutMs,
+        error: error instanceof Error ? error.message : String(error),
+      }, 'instrumentation');
+    }
   }
 }

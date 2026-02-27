@@ -3,13 +3,14 @@ import { getCaseManager } from '@/app/lib/cases';
 import { initializeStorage } from '@/app/lib/memory';
 
 interface Params {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }
 
-export async function GET(_req: NextRequest, { params }: Params) {
+export async function GET(_req: NextRequest, context: Params) {
+  const { id } = await context.params;
   await initializeStorage();
   const manager = getCaseManager();
-  const summary = manager.exportSummary(params.id);
+  const summary = manager.exportSummary(id);
   if (!summary) {
     return NextResponse.json({ error: 'case not found' }, { status: 404 });
   }
@@ -18,7 +19,7 @@ export async function GET(_req: NextRequest, { params }: Params) {
     status: 200,
     headers: {
       'Content-Type': 'text/plain; charset=utf-8',
-      'Content-Disposition': `attachment; filename="case_${params.id}.txt"`
+      'Content-Disposition': `attachment; filename="case_${id}.txt"`
     }
   });
 }
