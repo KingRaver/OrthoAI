@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPiperService } from '@/app/lib/voice/server/piperService';
+import { beginTrackedRequest, isShuttingDown } from '@/app/lib/system/shutdownRegistry';
+import { logger } from '@/app/lib/system/logger';
 
 export const runtime = 'nodejs';
 
@@ -34,7 +36,15 @@ function classifyTtsError(errorMessage: string): { status: number; message: stri
  * Returns list of available Piper voices
  */
 export async function GET(req: NextRequest) {
+  const completeRequest = beginTrackedRequest();
   try {
+    if (isShuttingDown()) {
+      return NextResponse.json(
+        { success: false, error: 'TTS service is shutting down. Please retry shortly.' },
+        { status: 503 }
+      );
+    }
+
     const searchParams = req.nextUrl.searchParams;
     const query = searchParams.get('q') || '';
     const limitParam = searchParams.get('limit');
@@ -50,10 +60,13 @@ export async function GET(req: NextRequest) {
     });
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    logger.error('Failed to list Piper voices', { error: errorMessage }, 'api-piper-tts');
     return NextResponse.json(
       { success: false, error: `Failed to list voices: ${errorMessage}` },
       { status: 500 }
     );
+  } finally {
+    completeRequest();
   }
 }
 
@@ -63,9 +76,17 @@ export async function GET(req: NextRequest) {
  * Returns: WAV audio synthesized by a persistent Piper worker
  */
 export async function POST(req: NextRequest): Promise<NextResponse> {
+  const completeRequest = beginTrackedRequest();
   const requestStart = Date.now();
 
   try {
+    if (isShuttingDown()) {
+      return NextResponse.json(
+        { error: 'TTS service is shutting down. Please retry shortly.' },
+        { status: 503 }
+      );
+    }
+
     const { text, voice = 'en_US-libritts-high' } = await req.json() as PiperTTSRequest;
 
     if (typeof text !== 'string') {
@@ -79,7 +100,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const totalDurationMs = Date.now() - requestStart;
 
     if (DEBUG_METRICS) {
-      console.log(
+      logger.info(
         `[Metrics] TTS piper-worker duration: ${result.durationMs}ms (total ${totalDurationMs}ms, bytes ${result.audioBuffer.length})`
       );
     }
@@ -99,12 +120,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     });
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    console.error('[Piper] Request error:', errorMessage);
+    logger.error('Piper TTS request failed', { error: errorMessage }, 'api-piper-tts');
 
     const classified = classifyTtsError(errorMessage);
     return NextResponse.json(
       { error: classified.message },
       { status: classified.status }
     );
+  } finally {
+    completeRequest();
   }
 }

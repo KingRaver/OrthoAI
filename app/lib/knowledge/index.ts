@@ -22,6 +22,7 @@ export interface KnowledgeSearchOptions {
   limit?: number;
   subspecialty?: string;
   diagnosisTag?: string;
+  condition?: string;
   documentId?: string;
 }
 
@@ -88,6 +89,33 @@ function generateId(prefix: string): string {
   const hash = createHash('sha1');
   hash.update(`${prefix}-${Date.now()}-${Math.random()}`);
   return `${prefix}_${hash.digest('hex').slice(0, 16)}`;
+}
+
+function tokenizeCondition(condition: string): string[] {
+  return Array.from(
+    new Set(
+      condition
+        .toLowerCase()
+        .match(/[a-z0-9]{3,}/g) || []
+    )
+  );
+}
+
+function inferCondition(query: string): string | null {
+  const normalized = query.toLowerCase();
+  const knownConditions = [
+    'acl tear',
+    'meniscus tear',
+    'rotator cuff tear',
+    'lumbar stenosis',
+    'disc herniation',
+    'osteoarthritis',
+    'fracture',
+    'achilles rupture',
+    'patellar instability',
+  ];
+
+  return knownConditions.find(condition => normalized.includes(condition)) || null;
 }
 
 export class KnowledgeManager {
@@ -235,6 +263,33 @@ export class KnowledgeManager {
       results = results.filter(result =>
         result.document.diagnosis_tags.some(tag => tag.toLowerCase() === needle)
       );
+    }
+
+    const explicitCondition = options.condition?.trim() || inferCondition(query) || '';
+    if (explicitCondition) {
+      const conditionTokens = tokenizeCondition(explicitCondition);
+      results = results
+        .map(result => {
+          const corpus = [
+            result.document.title,
+            result.document.diagnosis_tags.join(' '),
+            result.chunk.content,
+          ].join(' ').toLowerCase();
+
+          const matchedTokens = conditionTokens.filter(token => corpus.includes(token));
+          if (matchedTokens.length === 0) {
+            return null;
+          }
+
+          const boost = Math.min(0.2, matchedTokens.length * 0.05);
+          return {
+            ...result,
+            similarity: Math.min(1, result.similarity + boost),
+          };
+        })
+        .filter(Boolean) as KnowledgeSearchResult[];
+
+      results.sort((a, b) => b.similarity - a.similarity);
     }
 
     return results;

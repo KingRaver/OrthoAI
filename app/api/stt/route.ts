@@ -1,6 +1,8 @@
 // app/api/stt/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { getSttService } from '@/app/lib/voice/server/sttService';
+import { beginTrackedRequest, isShuttingDown } from '@/app/lib/system/shutdownRegistry';
+import { logger } from '@/app/lib/system/logger';
 
 export const runtime = 'nodejs';
 
@@ -43,9 +45,17 @@ function classifySttError(errorMessage: string): { status: number; message: stri
 }
 
 export async function POST(req: NextRequest) {
+  const completeRequest = beginTrackedRequest();
   const requestStart = Date.now();
 
   try {
+    if (isShuttingDown()) {
+      return NextResponse.json(
+        { error: 'STT service is shutting down. Please retry shortly.' },
+        { status: 503 }
+      );
+    }
+
     const audioBuffer = await extractAudioBuffer(req);
 
     if (audioBuffer.length === 0) {
@@ -66,7 +76,7 @@ export async function POST(req: NextRequest) {
     const totalDurationMs = Date.now() - requestStart;
 
     if (DEBUG_METRICS) {
-      console.log(
+      logger.info(
         `[Metrics] STT ${result.backend} duration: ${result.durationMs}ms (total ${totalDurationMs}ms, bytes ${audioBuffer.length})`
       );
     }
@@ -84,12 +94,14 @@ export async function POST(req: NextRequest) {
     });
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown STT error';
-    console.error('[STT] Fatal error:', errorMessage);
+    logger.error('STT request failed', { error: errorMessage }, 'api-stt');
 
     const classified = classifySttError(errorMessage);
     return NextResponse.json(
       { error: classified.message },
       { status: classified.status }
     );
+  } finally {
+    completeRequest();
   }
 }

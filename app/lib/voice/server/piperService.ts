@@ -2,6 +2,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { JsonLineWorkerClient } from './jsonLineWorker';
+import { registerShutdownHandler } from '@/app/lib/system/shutdownRegistry';
 
 interface WorkerTtsResponse {
   success: boolean;
@@ -75,6 +76,16 @@ class PiperService {
     this.worker?.stop();
     this.worker = null;
     this.activeVoice = null;
+  }
+
+  getStatus(): {
+    activeVoice: string | null;
+    workerRunning: boolean;
+  } {
+    return {
+      activeVoice: this.activeVoice,
+      workerRunning: Boolean(this.worker),
+    };
   }
 
   getAvailableVoices(query: string = '', limit: number | null = null): {
@@ -158,15 +169,35 @@ export function getPiperService(): PiperService {
 
   if (!globalPiper.__orthoaiPiperCleanupRegistered) {
     globalPiper.__orthoaiPiperCleanupRegistered = true;
-
-    const cleanup = () => {
+    registerShutdownHandler('piper-service', () => {
       globalPiper.__orthoaiPiperService?.dispose();
-    };
-
-    process.once('beforeExit', cleanup);
-    process.once('SIGINT', cleanup);
-    process.once('SIGTERM', cleanup);
+    });
   }
 
   return globalPiper.__orthoaiPiperService;
+}
+
+export function getPiperServiceStatus(): {
+  initialized: boolean;
+  activeVoice: string | null;
+  workerRunning: boolean;
+} {
+  if (!globalPiper.__orthoaiPiperService) {
+    return {
+      initialized: false,
+      activeVoice: null,
+      workerRunning: false,
+    };
+  }
+
+  return {
+    initialized: true,
+    ...globalPiper.__orthoaiPiperService.getStatus(),
+  };
+}
+
+export function disposePiperServiceIfInitialized(): void {
+  if (!globalPiper.__orthoaiPiperService) return;
+  globalPiper.__orthoaiPiperService.dispose();
+  globalPiper.__orthoaiPiperService = undefined;
 }

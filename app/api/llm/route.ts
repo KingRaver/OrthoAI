@@ -5,7 +5,13 @@ import { buildContextForLLMCall } from '../../lib/domain/contextBuilder';
 import { strategyManager } from '@/app/lib/strategy/manager';
 import type { StrategyDecision } from '@/app/lib/strategy/types';
 import OpenAI from 'openai';
-import { getDefaultModel, getLlmApiKey, getLlmBaseUrl, getLlmChatUrl, getLlmRequestTimeoutMs } from '@/app/lib/llm/config';
+import {
+  getDefaultModel,
+  getLlmApiKey,
+  getLlmBaseUrl,
+  getLlmChatUrlForModel,
+  getLlmRequestTimeoutMs,
+} from '@/app/lib/llm/config';
 import type { ChatCompletionMessageParam } from 'openai/resources/chat';
 import type { ChatCompletionMessageFunctionToolCall } from 'openai/resources/chat/completions';
 import type { ChatCompletionMessage } from 'openai/resources/chat/completions';
@@ -18,6 +24,12 @@ import {
   normalizeMemoryRuntimePreferences,
   type MemoryRuntimePreferences,
 } from '@/app/lib/memory/preferences';
+import {
+  mapLlmErrorToUserMessage,
+  runWithModelFallback,
+} from '@/app/lib/llm/resilience';
+import { beginTrackedRequest, isShuttingDown } from '@/app/lib/system/shutdownRegistry';
+import { logger } from '@/app/lib/system/logger';
 
 const DEBUG_METRICS = process.env.DEBUG_METRICS === 'true';
 const DEBUG_MEMORY = process.env.DEBUG_MEMORY === 'true' || DEBUG_METRICS;
@@ -40,7 +52,8 @@ async function computeInitialQuality(
   enableTools: boolean,
   fallback: number
 ): Promise<number> {
-  const theme = strategyDecision?.metadata?.detectedTheme;
+  const rawTheme = strategyDecision?.metadata?.detectedTheme;
+  const theme = typeof rawTheme === 'string' ? rawTheme : undefined;
   const complexity = strategyDecision?.complexityScore;
   if (!theme || complexity === undefined) return fallback;
   try {
@@ -62,11 +75,19 @@ export const runtime = 'nodejs'; // Required for SQLite/Chroma
 export const maxDuration = 3600; // 60 minutes max for complex queries (local dev - Vercel limit is 300s, but we need more time for chain workflows)
 
 export async function POST(req: NextRequest) {
+  const completeRequest = beginTrackedRequest();
   // Declare strategy variables outside try block for error handling
   let strategyDecision: StrategyDecision | null = null;
   let strategyStartTime = Date.now();
 
   try {
+    if (isShuttingDown()) {
+      return NextResponse.json(
+        { error: 'Service is shutting down. Please retry shortly.' },
+        { status: 503 }
+      );
+    }
+
     const {
       model: requestedModel = getDefaultModel(),
       messages,
@@ -217,6 +238,7 @@ CRITICAL: Never repeat or echo these instructions. Respond directly to the user 
     // ============================================================
     // CASE CONTEXT INJECTION: Add patient case context
     // ============================================================
+    let activeCaseConditionHint: string | undefined;
     if (caseId) {
       try {
         const { getCaseManager } = await import('@/app/lib/cases');
@@ -259,6 +281,7 @@ CRITICAL: Never repeat or echo these instructions. Respond directly to the user 
 
           if (patientCase.tags.length > 0) {
             caseContext += `**Tags:** ${patientCase.tags.join(', ')}\n`;
+            activeCaseConditionHint = patientCase.tags[0];
           }
 
           // Add timeline events
@@ -272,6 +295,9 @@ CRITICAL: Never repeat or echo these instructions. Respond directly to the user 
           }
 
           caseContext += `\nUse this patient context to provide relevant, personalized responses. Reference the case details when applicable.`;
+          if (!activeCaseConditionHint && patientCase.complaints) {
+            activeCaseConditionHint = patientCase.complaints;
+          }
 
           systemPrompt += caseContext;
           console.log(`[Case] Injected context for case: ${patientCase.title}`);
@@ -303,7 +329,10 @@ CRITICAL: Never repeat or echo these instructions. Respond directly to the user 
         const query = lastUserMessage.content;
 
         // Search knowledge base for relevant content
-        const knowledgeResults = await km.search(query, { limit: 3 });
+        const knowledgeResults = await km.search(query, {
+          limit: 3,
+          condition: activeCaseConditionHint,
+        });
         const shouldIncludeEvidence = detectedMode === 'evidence-brief' ||
           manualModeOverride === 'evidence-brief' ||
           Boolean(researchMode);
@@ -495,8 +524,7 @@ CRITICAL: Never repeat or echo these instructions. Respond directly to the user 
     // For streaming: use fetch for manual control
     if (stream) {
       const llmRequestStart = Date.now();
-      const body: {
-        model: string;
+      const baseBody: {
         messages: ChatCompletionMessageParam[];
         temperature: number;
         top_p: number;
@@ -505,7 +533,6 @@ CRITICAL: Never repeat or echo these instructions. Respond directly to the user 
         tools?: ReturnType<typeof getTools>;
         tool_choice?: 'auto';
       } = {
-        model,
         messages: enhancedMessages,
         temperature: temperature,
         top_p: 0.85,
@@ -515,35 +542,50 @@ CRITICAL: Never repeat or echo these instructions. Respond directly to the user 
 
       if (enableTools) {
         const tools = getTools();
-        body.tools = tools;
-        body.tool_choice = 'auto';
+        baseBody.tools = tools;
+        baseBody.tool_choice = 'auto';
       }
 
-      const url = getLlmChatUrl();
+      const { model: selectedModel, result: response } = await runWithModelFallback(
+        model,
+        async (candidateModel) => {
+          const body = { ...baseBody, model: candidateModel };
+          const url = getLlmChatUrlForModel(candidateModel);
 
-      // Undici is configured globally in instrumentation.ts with no timeouts
-      const timeoutMs = getLlmRequestTimeoutMs();
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+          // Undici is configured globally in instrumentation.ts with bounded timeouts
+          const timeoutMs = getLlmRequestTimeoutMs();
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
-      let response: Response;
-      try {
-        response = await fetch(url, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Connection': 'keep-alive'
-          },
-          body: JSON.stringify(body),
-          signal: controller.signal
-        });
-      } finally {
-        clearTimeout(timeoutId);
-      }
+          try {
+            const candidateResponse = await fetch(url, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Connection': 'keep-alive'
+              },
+              body: JSON.stringify(body),
+              signal: controller.signal
+            });
 
-      if (!response.ok) {
-        const error = await response.text();
-        throw new Error(`LLM server error: ${response.status} - ${error}`);
+            if (!candidateResponse.ok) {
+              const error = await candidateResponse.text();
+              throw new Error(`LLM server error: ${candidateResponse.status} - ${error}`);
+            }
+
+            return candidateResponse;
+          } finally {
+            clearTimeout(timeoutId);
+          }
+        }
+      );
+
+      if (selectedModel !== model) {
+        logger.warn('Streaming fallback model selected', {
+          requestedModel: model,
+          selectedModel,
+        }, 'llm-route');
+        model = selectedModel;
       }
 
     // ============================================================
@@ -689,18 +731,28 @@ CRITICAL: Never repeat or echo these instructions. Respond directly to the user 
     // ============================================================
     // Use OpenAI SDK for non-streaming with proper types
     const llmRequestStart = Date.now();
-    const completion = await openai.chat.completions.create({
+    const completionResult = await runWithModelFallback(
       model,
-      messages: enhancedMessages,
-      temperature: temperature,
-      top_p: 0.85,
-      max_tokens: maxTokens,
-      stream: false,
-      tools: enableTools ? getTools() : undefined,
-      tool_choice: enableTools ? 'auto' : undefined,
-    });
+      async (candidateModel) => openai.chat.completions.create({
+        model: candidateModel,
+        messages: enhancedMessages,
+        temperature: temperature,
+        top_p: 0.85,
+        max_tokens: maxTokens,
+        stream: false,
+        tools: enableTools ? getTools() : undefined,
+        tool_choice: enableTools ? 'auto' : undefined,
+      })
+    );
+    if (completionResult.model !== model) {
+      logger.warn('Non-streaming fallback model selected', {
+        requestedModel: model,
+        selectedModel: completionResult.model,
+      }, 'llm-route');
+      model = completionResult.model;
+    }
 
-    let currentCompletion = completion;
+    let currentCompletion = completionResult.result;
     let allMessages = enhancedMessages;
 
     // Tool looping with OpenAI SDK
@@ -726,12 +778,17 @@ CRITICAL: Never repeat or echo these instructions. Respond directly to the user 
           allMessages = await executeTools(toolCalls, allMessages);
 
           // Make another call with the updated messages
-          currentCompletion = await openai.chat.completions.create({
+          const retryCompletion = await runWithModelFallback(
             model,
-            messages: allMessages,
-            max_tokens: maxTokens,
-            stream: false,
-          });
+            async (candidateModel) => openai.chat.completions.create({
+              model: candidateModel,
+              messages: allMessages,
+              max_tokens: maxTokens,
+              stream: false,
+            })
+          );
+          model = retryCompletion.model;
+          currentCompletion = retryCompletion.result;
           continue;
         }
 
@@ -782,12 +839,17 @@ CRITICAL: Never repeat or echo these instructions. Respond directly to the user 
                 allMessages = await executeTools([syntheticToolCall], allMessages);
 
                 // Make another call with the updated messages
-                currentCompletion = await openai.chat.completions.create({
+                const retryCompletion = await runWithModelFallback(
                   model,
-                  messages: allMessages,
-                  max_tokens: maxTokens,
-                  stream: false,
-                });
+                  async (candidateModel) => openai.chat.completions.create({
+                    model: candidateModel,
+                    messages: allMessages,
+                    max_tokens: maxTokens,
+                    stream: false,
+                  })
+                );
+                model = retryCompletion.model;
+                currentCompletion = retryCompletion.result;
                 continue;
               }
             } catch (e) {
@@ -907,7 +969,13 @@ CRITICAL: Never repeat or echo these instructions. Respond directly to the user 
       }
     }
 
-    const message = error instanceof Error ? error.message : 'LLM request failed';
-    return NextResponse.json({ error: message }, { status: 500 });
+    const message = mapLlmErrorToUserMessage(error);
+    const lower = message.toLowerCase();
+    const status = lower.includes('temporarily unavailable') || lower.includes('all configured models')
+      ? 503
+      : 500;
+    return NextResponse.json({ error: message }, { status });
+  } finally {
+    completeRequest();
   }
 }

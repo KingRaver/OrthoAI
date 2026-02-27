@@ -1,7 +1,7 @@
 // app/lib/strategy/workflows/chain.ts
 import type { ChatCompletionMessageParam } from 'openai/resources/chat';
 import { ModelChainConfig, ModelChainStep } from '../types';
-import { getLlmChatUrl } from '@/app/lib/llm/config';
+import { getLlmChatUrlForModel } from '@/app/lib/llm/config';
 
 type LlmChatRequest = {
   model: string;
@@ -163,7 +163,7 @@ export class ModelChainWorkflow {
       body.max_tokens = maxTokens;
     }
 
-    const response = await fetch(getLlmChatUrl(), {
+    const response = await fetch(getLlmChatUrlForModel(step.model), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
