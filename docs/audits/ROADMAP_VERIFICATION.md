@@ -106,6 +106,13 @@
 - `E93` `components/LearningDashboard.tsx:61-72,79,137,476-520`
 - `E94` `app/lib/system/logger.ts:1-77`
 - `E95` `app/lib/strategy/implementations/workflowStrategy.ts:35-39,57-60,95-101`
+- `E96` `app/lib/benchmarks/clinicalReasoning/types.ts:1-147`
+- `E97` `app/lib/benchmarks/clinicalReasoning/scorer.ts:1-504`
+- `E98` `app/lib/benchmarks/clinicalReasoning/cases.v1.json`
+- `E99` `scripts/benchmark-clinical-decision-support.mjs`, `scripts/benchmark-clinical-llm.mjs`, `scripts/benchmark-clinical-reasoning.mjs`, `scripts/lib/clinical-benchmark-core.mjs`
+- `E100` `app/lib/memory/migrations/017_clinical_benchmarks.sql:1-80`
+- `E101` `__tests__/clinical.benchmark.scorer.test.ts:1-129`
+- `E102` `docs/STARTUP.md:123-181`
 
 ## Design Principles
 - Local-first, offline-capable | Roadmap `[ ]` | Verified `PARTIAL` | Evidence: `E1`, `E4`, `E5`, `E52`, `E53` | Core chat/memory is local; evidence sync features are networked/optional.
@@ -130,8 +137,8 @@
 - Rewrite domain knowledge base with orthopedic terminology | Roadmap `[x]` | Verified `FULL` | Evidence: `E7`
 - Update context detection for clinical queries | Roadmap `[x]` | Verified `FULL` | Evidence: `E8`
 - Align base system prompt for clinical reasoning | Roadmap `[x]` | Verified `FULL` | Evidence: `E9`
-- Build clinical reasoning evaluation benchmark | Roadmap `[x]` | Verified `FULL` | Evidence: `E10`
-- Create scoring rubric for diagnostic accuracy and treatment appropriateness | Roadmap `[x]` | Verified `FULL` | Evidence: `E10`
+- Build clinical reasoning evaluation benchmark | Roadmap `[x]` | Verified `FULL` | Evidence: `E10`, `E96`, `E98`, `E99`, `E100`
+- Create scoring rubric for diagnostic accuracy and treatment appropriateness | Roadmap `[x]` | Verified `FULL` | Evidence: `E10`, `E96`, `E97`, `E101`, `E102`
 - Encode orthopedic examination protocols | Roadmap `[x]` | Verified `FULL` | Evidence: `E7`
 - Add anatomical knowledge base | Roadmap `[x]` | Verified `FULL` | Evidence: `E7`
 

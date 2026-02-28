@@ -1,0 +1,46 @@
+{
+  "reviews": [
+    {
+      "target": "llm",
+      "caseId": "case-01-acl-pivot-athlete",
+      "reviewerId": "dr_primary",
+      "source": "clinician_primary",
+      "adjudicationStatus": "pending",
+      "comments": "Solid structure; differential could be tighter.",
+      "dimensions": {
+        "diagnosticAccuracy": {
+          "score": 3,
+          "rationale": "Primary diagnosis present with reasonable ranking."
+        },
+        "workupSelection": {
+          "score": 4,
+          "rationale": "Appropriate imaging and escalation sequencing."
+        },
+        "treatmentAppropriateness": {
+          "score": 3,
+          "rationale": "Plan is safe and clinically aligned."
+        },
+        "redFlagDetection": {
+          "score": 4,
+          "rationale": "Critical escalation signs were explicit."
+        },
+        "examProtocolUsage": {
+          "score": 3,
+          "rationale": "Core maneuvers listed with useful specificity."
+        },
+        "imagingInterpretationGuidance": {
+          "score": 3,
+          "rationale": "Imaging guidance was present but not deeply sequenced."
+        },
+        "rehabRtpGuidance": {
+          "score": 3,
+          "rationale": "Reasonable staged progression criteria."
+        },
+        "clarityAndStructure": {
+          "score": 4,
+          "rationale": "Highly structured and easy to follow."
+        }
+      }
+    }
+  ]
+}
