@@ -186,6 +186,10 @@ Open [http://localhost:3000](http://localhost:3000)
 | `npm run type-check` | TypeScript type checking |
 | `npm run chroma-start` | Start ChromaDB container |
 | `npm run chroma-stop` | Stop ChromaDB container |
+| `npm run benchmark:clinical:decision-support` | Run deterministic clinical benchmark against `/api/clinical/decision-support` |
+| `npm run benchmark:clinical:llm` | Run LLM clinical benchmark against `/api/llm` |
+| `npm run benchmark:clinical:all` | Run both benchmark targets and write report to `docs/audits/reports/` |
+| `npm run benchmark:clinical:gate` | Release gate: fail on threshold miss or regression |
 | `npm run analyze` | Bundle size analysis |
 
 ## Key Modules

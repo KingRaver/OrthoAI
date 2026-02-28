@@ -1,0 +1,245 @@
+{
+  "version": "v1",
+  "cases": [
+    {
+      "id": "case-01-acl-pivot-athlete",
+      "title": "ACL tear in a pivoting athlete with instability",
+      "llmMode": "clinical-consult",
+      "input": {
+        "complaint": "Knee gave out during pivot; immediate swelling and recurrent instability",
+        "history": "24-year-old soccer athlete with non-contact pivot injury 3 days ago, reports pop and giving-way episodes.",
+        "examFindings": [
+          "Large effusion",
+          "Positive Lachman",
+          "Positive pivot shift",
+          "Limited terminal extension"
+        ],
+        "age": 24,
+        "comorbidities": [],
+        "activityGoal": "Return to competitive cutting sports",
+        "procedure": "ACL reconstruction",
+        "daysSinceInjury": 3
+      },
+      "expected": {
+        "primaryDiagnosis": ["acl rupture", "anterior cruciate ligament tear"],
+        "differential": ["meniscal tear", "mcl sprain", "osteochondral injury"],
+        "workup": ["knee radiographs", "mri", "lachman", "pivot shift"],
+        "treatment": ["orthopedic consultation", "acl reconstruction", "structured rehabilitation", "bracing"],
+        "redFlags": ["neurovascular compromise", "locked knee", "inability to bear weight"],
+        "rehabRtp": ["quadriceps activation", "neuromuscular control", "return-to-sport testing"],
+        "examProtocol": ["effusion", "range of motion", "lachman", "pivot shift"],
+        "imaging": ["knee radiographs", "mri"]
+      }
+    },
+    {
+      "id": "case-02-proximal-humerus-fracture",
+      "title": "Proximal humerus fracture in an older adult with osteopenia",
+      "llmMode": "treatment-decision",
+      "input": {
+        "complaint": "Severe shoulder pain after fall onto outstretched hand",
+        "history": "72-year-old with osteopenia and diabetes after low-energy fall; cannot lift arm.",
+        "examFindings": [
+          "Shoulder swelling and ecchymosis",
+          "Pain with any active movement",
+          "Distal pulses intact",
+          "Mild paresthesia over lateral deltoid"
+        ],
+        "age": 72,
+        "comorbidities": ["osteopenia", "type 2 diabetes"],
+        "activityGoal": "Independent ADLs",
+        "procedure": "ORIF proximal humerus",
+        "daysSinceInjury": 1
+      },
+      "expected": {
+        "primaryDiagnosis": ["proximal humerus fracture"],
+        "differential": ["glenohumeral dislocation", "rotator cuff tear", "humeral head fracture"],
+        "workup": ["shoulder radiographs", "axillary view", "ct", "neurovascular exam"],
+        "treatment": ["sling immobilization", "pain control", "orthopedic follow-up", "surgery if displaced"],
+        "redFlags": ["open fracture", "neurovascular compromise", "skin tenting"],
+        "rehabRtp": ["pendulum exercises", "progressive range of motion", "deltoid strengthening"],
+        "examProtocol": ["deformity", "swelling", "axillary nerve", "distal pulses"],
+        "imaging": ["shoulder x-ray", "axillary view", "ct"]
+      }
+    },
+    {
+      "id": "case-03-lumbar-radiculopathy-red-flags",
+      "title": "Lumbar radiculopathy with progressive weakness and red flags",
+      "llmMode": "complications-risk",
+      "input": {
+        "complaint": "Low back pain radiating to leg with worsening weakness and urinary retention",
+        "history": "44-year-old with 2 weeks of radicular pain, now saddle numbness and difficulty voiding.",
+        "examFindings": [
+          "Progressive dorsiflexion weakness",
+          "Reduced Achilles reflex",
+          "Saddle anesthesia",
+          "Urinary retention"
+        ],
+        "age": 44,
+        "comorbidities": [],
+        "activityGoal": "Preserve neurologic function and return to work",
+        "procedure": "Urgent lumbar decompression",
+        "daysSinceInjury": 14
+      },
+      "expected": {
+        "primaryDiagnosis": ["cauda equina syndrome", "lumbar disc herniation with radiculopathy"],
+        "differential": ["lumbar stenosis", "epidural abscess", "metastatic spinal cord compression"],
+        "workup": ["urgent lumbar mri", "full neurologic exam", "post-void residual", "cbc"],
+        "treatment": ["emergent spine consultation", "urgent decompression", "pain management", "ed transfer"],
+        "redFlags": ["urinary retention", "saddle anesthesia", "progressive weakness"],
+        "rehabRtp": ["activity modification", "post-op physical therapy", "graded return to function"],
+        "examProtocol": ["motor strength", "reflexes", "sensory exam", "straight leg raise"],
+        "imaging": ["lumbar mri"]
+      }
+    },
+    {
+      "id": "case-04-hip-fai-labral",
+      "title": "Hip pain in a young athlete (FAI vs labral tear)",
+      "llmMode": "imaging-dx",
+      "input": {
+        "complaint": "Anterior hip/groin pain worsened by cutting and deep flexion",
+        "history": "21-year-old collegiate hockey player with 4 months of activity-related groin pain and catching.",
+        "examFindings": [
+          "Positive FADIR",
+          "Pain with hip flexion/internal rotation",
+          "No neurologic deficits",
+          "Pain reproduced with pivot"
+        ],
+        "age": 21,
+        "comorbidities": [],
+        "activityGoal": "Return to high-level skating",
+        "procedure": "Hip arthroscopy",
+        "daysSinceInjury": 120
+      },
+      "expected": {
+        "primaryDiagnosis": ["femoroacetabular impingement", "labral tear"],
+        "differential": ["hip flexor strain", "femoral neck stress fracture", "sports hernia"],
+        "workup": ["ap pelvis radiographs", "dunn view", "mri arthrogram", "impingement testing"],
+        "treatment": ["activity modification", "physical therapy", "nsaids", "arthroscopic referral"],
+        "redFlags": ["inability to bear weight", "night pain", "fever"],
+        "rehabRtp": ["hip mobility", "core and glute strengthening", "return-to-sport progression"],
+        "examProtocol": ["fadir", "faber", "gait", "hip range of motion"],
+        "imaging": ["ap pelvis", "dunn view", "mri arthrogram"]
+      }
+    },
+    {
+      "id": "case-05-knee-oa-meniscal",
+      "title": "Knee pain in middle age (OA vs meniscal tear)",
+      "llmMode": "treatment-decision",
+      "input": {
+        "complaint": "Medial knee pain with stiffness and intermittent clicking",
+        "history": "55-year-old active worker with chronic medial knee pain, worse with stairs and prolonged standing.",
+        "examFindings": [
+          "Medial joint-line tenderness",
+          "Crepitus",
+          "Mild effusion",
+          "Pain with Thessaly"
+        ],
+        "age": 55,
+        "comorbidities": ["obesity"],
+        "activityGoal": "Maintain work capacity",
+        "procedure": "Knee arthroscopy",
+        "daysSinceInjury": 180
+      },
+      "expected": {
+        "primaryDiagnosis": ["knee osteoarthritis", "meniscal tear"],
+        "differential": ["patellofemoral pain", "ligament injury", "crystal arthropathy"],
+        "workup": ["weight-bearing knee radiographs", "mri if mechanical symptoms", "alignment exam"],
+        "treatment": ["exercise therapy", "weight management", "nsaids", "injection options"],
+        "redFlags": ["locked knee", "septic arthritis", "acute inability to bear weight"],
+        "rehabRtp": ["quadriceps strengthening", "low-impact aerobic training", "functional progression"],
+        "examProtocol": ["joint line tenderness", "crepitus", "range of motion", "thessaly"],
+        "imaging": ["weight-bearing knee radiographs", "mri"]
+      }
+    },
+    {
+      "id": "case-06-pediatric-scfe",
+      "title": "Pediatric limping with suspected SCFE",
+      "llmMode": "clinical-consult",
+      "input": {
+        "complaint": "Adolescent limp with hip and knee pain",
+        "history": "13-year-old with obesity and 1 week progressive limp, externally rotated foot progression.",
+        "examFindings": [
+          "Antalgic gait",
+          "Limited internal rotation",
+          "Obligate external rotation with hip flexion",
+          "Referred pain to knee"
+        ],
+        "age": 13,
+        "comorbidities": ["obesity"],
+        "activityGoal": "Return to school sports",
+        "procedure": "In-situ screw fixation",
+        "daysSinceInjury": 7
+      },
+      "expected": {
+        "primaryDiagnosis": ["slipped capital femoral epiphysis", "scfe"],
+        "differential": ["legg-calve-perthes", "septic arthritis", "transient synovitis"],
+        "workup": ["urgent ap and frog-leg radiographs", "non-weight bearing", "orthopedic consultation", "cbc"],
+        "treatment": ["immediate non-weight bearing", "urgent surgical pinning", "pain control"],
+        "redFlags": ["inability to bear weight", "fever", "severe pain"],
+        "rehabRtp": ["protected weight bearing", "range of motion", "graduated return to activity"],
+        "examProtocol": ["antalgic gait", "obligate external rotation", "hip range of motion", "knee referred pain"],
+        "imaging": ["ap pelvis", "frog-leg lateral"]
+      }
+    },
+    {
+      "id": "case-07-ankle-syndesmotic",
+      "title": "Ankle sprain with syndesmotic injury suspicion",
+      "llmMode": "rehab-rtp",
+      "input": {
+        "complaint": "Ankle pain above joint line after external rotation injury",
+        "history": "19-year-old basketball player with twisting injury and persistent pain with push-off.",
+        "examFindings": [
+          "Positive squeeze test",
+          "Pain with external rotation stress",
+          "Difficulty single-leg hop",
+          "Moderate swelling"
+        ],
+        "age": 19,
+        "comorbidities": [],
+        "activityGoal": "Return to collegiate basketball",
+        "procedure": "Syndesmotic fixation",
+        "daysSinceInjury": 5
+      },
+      "expected": {
+        "primaryDiagnosis": ["syndesmotic ankle sprain", "high ankle sprain"],
+        "differential": ["lateral ankle sprain", "ankle fracture", "deltoid ligament injury"],
+        "workup": ["ottawa ankle rules", "ankle radiographs", "external rotation stress test", "mri if persistent"],
+        "treatment": ["immobilization", "protected weight bearing", "sports medicine referral", "functional rehab"],
+        "redFlags": ["fracture", "neurovascular compromise", "compartment syndrome"],
+        "rehabRtp": ["proprioception", "peroneal strengthening", "graded running return"],
+        "examProtocol": ["squeeze test", "external rotation test", "anterior drawer", "talar tilt"],
+        "imaging": ["ankle radiographs", "stress radiographs", "mri"]
+      }
+    },
+    {
+      "id": "case-08-rotator-cuff",
+      "title": "Shoulder pain with suspected rotator cuff tear",
+      "llmMode": "surgical-planning",
+      "input": {
+        "complaint": "Progressive shoulder pain and weakness with overhead activity",
+        "history": "61-year-old with 6 months of atraumatic shoulder pain, now night pain and lifting weakness.",
+        "examFindings": [
+          "Painful arc",
+          "Weakness in external rotation",
+          "Positive empty can",
+          "Positive drop arm"
+        ],
+        "age": 61,
+        "comorbidities": ["hypertension"],
+        "activityGoal": "Return to overhead work",
+        "procedure": "Arthroscopic rotator cuff repair",
+        "daysSinceInjury": 180
+      },
+      "expected": {
+        "primaryDiagnosis": ["rotator cuff tear"],
+        "differential": ["subacromial impingement", "biceps tendinopathy", "cervical radiculopathy"],
+        "workup": ["shoulder radiographs", "ultrasound or mri", "strength testing", "neurovascular exam"],
+        "treatment": ["physical therapy", "activity modification", "subacromial injection", "surgical referral"],
+        "redFlags": ["acute pseudoparalysis", "neurovascular deficit", "infection signs"],
+        "rehabRtp": ["scapular stabilization", "rotator cuff strengthening", "graded overhead return"],
+        "examProtocol": ["painful arc", "empty can", "external rotation weakness", "drop arm"],
+        "imaging": ["shoulder x-ray", "mri", "ultrasound"]
+      }
+    }
+  ]
+}

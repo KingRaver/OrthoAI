@@ -1,5 +1,87 @@
 # Changelog
 
+## [Beta Testing Ongoing] - 2026-02-28
+
+### Added
+- **Clinical reasoning benchmark runtime (dual-target)**
+  - Added machine-readable v1 fixtures for all 8 benchmark cases.
+  - Added rubric/type system covering all 8 scoring dimensions and hard thresholds.
+  - Added deterministic scorer with per-dimension 0-4 scoring, notes, and pass/fail evaluation.
+  - Added hybrid clinician-review aggregation with disagreement and adjudication handling.
+- **Benchmark execution scripts**
+  - Added decision-support runner (`benchmark-clinical-decision-support.mjs`).
+  - Added LLM runner (`benchmark-clinical-llm.mjs`).
+  - Added combined orchestrator (`benchmark-clinical-reasoning.mjs`) with merged reporting.
+  - Added shared benchmark core library for DB persistence, baseline lookup, and report generation.
+- **Benchmark persistence schema**
+  - Added migration `017_clinical_benchmarks.sql` for:
+    - `clinical_benchmark_runs`
+    - `clinical_benchmark_case_results`
+    - `clinical_benchmark_dimension_scores`
+- **Benchmark tests and review template**
+  - Added scorer/gate unit tests.
+  - Added clinician review template JSON for hybrid scoring runs.
+
+### Changed
+- **Package scripts now include clinical benchmark commands**
+  - `benchmark:clinical:decision-support`
+  - `benchmark:clinical:llm`
+  - `benchmark:clinical:all`
+  - `benchmark:clinical:gate` (fails on gate misses and regressions)
+- **Audit documentation aligned to implementation**
+  - `docs/audits/IMPLEMENT_BENCHMARKS.md` updated to `FULL` with completed checklist.
+  - `docs/audits/ROADMAP_VERIFICATION.md` evidence index expanded for benchmark runtime artifacts.
+  - `README.md` scripts table now includes clinical benchmark commands.
+  - Added reports directory note for generated benchmark reports.
+
+### Validation
+- `npm run test:run` passes (`91` tests).
+- `npm run type-check` passes.
+
+### Files Modified
+- `app/lib/benchmarks/clinicalReasoning/cases.v1.json`
+- `app/lib/benchmarks/clinicalReasoning/types.ts`
+- `app/lib/benchmarks/clinicalReasoning/scorer.ts`
+- `app/lib/benchmarks/clinicalReasoning/index.ts`
+- `app/lib/memory/migrations/017_clinical_benchmarks.sql`
+- `scripts/lib/clinical-benchmark-core.mjs`
+- `scripts/benchmark-clinical-decision-support.mjs`
+- `scripts/benchmark-clinical-llm.mjs`
+- `scripts/benchmark-clinical-reasoning.mjs`
+- `__tests__/clinical.benchmark.scorer.test.ts`
+- `docs/audits/clinical-review-template.json`
+- `docs/audits/reports/README.md`
+- `docs/audits/IMPLEMENT_BENCHMARKS.md`
+- `docs/audits/ROADMAP_VERIFICATION.md`
+- `README.md`
+- `package.json`
+
+### Review: Clinical Benchmark Implementation Verification (2026-02-28)
+
+**Tests: 4/4 PASS** (`__tests__/clinical.benchmark.scorer.test.ts`)
+- Awards high scores when expected benchmark concepts are covered
+- Fails case correctly when critical dimensions are missed
+- Enforces aggregate gate thresholds (redFlag + diagnostic minimums)
+- Tracks clinician disagreement and adjudication workflow data
+
+**Functional findings:**
+- Scorer correctly handles all JSON response shapes via recursive `flattenResponseText`.
+- `scoreDiagnosticDimension` distinguishes primary vs differential match levels (0–4) correctly.
+- `evaluateCasePass` ANDs all required conditions; `redFlagDetection` and `diagnosticAccuracy` have stricter thresholds (3.5 / 3.0) on top of the shared `requiredDimensionMin`, which is intentional.
+- `evaluateGate` emits 11 checks (3 top-level + 8 per-dimension), resulting in intentional granularity for failing gate reports.
+- DB schema uses `COALESCE(reviewer_id, '')` in the UNIQUE index to correctly handle nullable reviewer — no uniqueness bug.
+- `loadClinicianReviews` handles both bare-array and `{ reviews: [] }` wrapped JSON defensively.
+- Combined run baseline lookup reads from `notes?.merged?.aggregate?.perDimensionAverage`; silently skips regression if prior notes schema differs — acceptable but noted.
+- All 4 package scripts wired correctly; `benchmark:clinical:gate` exits 2 on gate failure and 3 on regression.
+
+**Test coverage gaps identified (lower risk, worth adding before promotion):**
+- `flattenResponseText` edge cases (deeply nested objects, arrays, mixed types)
+- `scoreFromCoverage` boundary values (0%, 34%, 50%, 80% thresholds)
+- `aggregateClinicalBenchmarkScores` with empty case list
+- `loadClinicianReviews` malformed / missing-field input rejection
+
+---
+
 ## [Unreleased] - 2026-02-27
 
 ### Changed
