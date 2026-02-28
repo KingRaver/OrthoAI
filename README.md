@@ -261,6 +261,10 @@ OrthoAI is designed for local-first operation:
 - No external API calls for core functionality
 - Explicit consent required for profile memory features
 
+## Legal Disclaimer
+
+See [DISCLAIMER.md](DISCLAIMER.md). OrthoAI is not medical advice and does not replace independent clinical judgment.
+
 ## License
 
 See [LICENSE.md](LICENSE.md) for details.
