@@ -30,7 +30,7 @@
     "@cornerstonejs/core": "^4.15.30",
     "@cornerstonejs/tools": "^4.15.30",
     "ai": "^6.0.20",
-    "better-sqlite3": "^12.5.0",
+    "better-sqlite3": "^12.9.0",
     "chromadb": "^3.2.0",
     "dicom-parser": "^1.8.21",
     "mathjs": "^15.1.0",
